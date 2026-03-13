@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-RAWWEAR Telegram Shop Bot
-Версия для Termux на python-telegram-bot v13.x
-Упрощенная логика статусов: new, approved, rejected
+RAWWEAR Telegram Shop Bot - ИСПРАВЛЕННАЯ ВЕРСИЯ
 """
 
 import logging
@@ -39,7 +37,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# -------------------- СОСТОЯНИЯ ДЛЯ CONVERSATION HANDLER --------------------
+# -------------------- СОСТОЯНИЯ --------------------
 (
     CATEGORY_SELECTION, SUBCATEGORY_SELECTION, ADD_PRODUCT_NAME, 
     ADD_PRODUCT_DESCRIPTION, ADD_PRODUCT_PRICE, ADD_PRODUCT_SIZES, 
@@ -48,7 +46,7 @@ logger = logging.getLogger(__name__)
     MAILING_TEXT, MAILING_CONFIRM, ORDER_REJECT_REASON
 ) = range(15)
 
-# -------------------- УПРОЩЕННЫЕ СТАТУСЫ ЗАКАЗОВ --------------------
+# -------------------- СТАТУСЫ ЗАКАЗОВ --------------------
 ORDER_STATUSES = {
     'new': '🟡 На модерации',
     'approved': '✅ Одобрен',
@@ -71,7 +69,7 @@ def db_connection():
         conn.close()
 
 def init_db():
-    """Создание таблиц с упрощенными статусами"""
+    """Создание таблиц с правильной структурой"""
     with db_connection() as conn:
         cursor = conn.cursor()
 
@@ -141,7 +139,7 @@ def init_db():
             )
         """)
 
-        # Заказы - упрощенные статусы
+        # Заказы - с колонкой reject_reason
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -484,21 +482,20 @@ def get_user_orders(user_id: int) -> List[Dict[str, Any]]:
             order['items'] = [dict(row) for row in cursor.fetchall()]
         return orders
 
-def update_order_status(order_id: int, status: str, reject_reason: str = "") -> bool:
-    """Обновляет статус заказа"""
+def update_order_status(order_id: int, status: str, reject_reason: str = ""):
+    """Обновляет статус заказа с правильной обработкой reject_reason"""
     with db_connection() as conn:
         cursor = conn.cursor()
-        if status == 'rejected' and reject_reason:
+        if status == 'rejected':
             cursor.execute(
-                "UPDATE orders SET status = ?, reject_reason = ? WHERE id = ?", 
+                "UPDATE orders SET status = ?, reject_reason = ? WHERE id = ?",
                 (status, reject_reason, order_id)
             )
         else:
             cursor.execute(
-                "UPDATE orders SET status = ? WHERE id = ?", 
+                "UPDATE orders SET status = ? WHERE id = ?",
                 (status, order_id)
             )
-        return cursor.rowcount > 0
 
 def get_order(order_id: int) -> Optional[Dict[str, Any]]:
     with db_connection() as conn:
@@ -732,21 +729,13 @@ def admin_orders_keyboard(orders: List[Dict[str, Any]], page: int = 1, total_pag
     return InlineKeyboardMarkup(keyboard)
 
 def admin_order_detail_keyboard(order_id: int) -> InlineKeyboardMarkup:
-    """Упрощенная клавиатура с 3 статусами"""
+    """Клавиатура с 3 статусами"""
     keyboard = [
         [
             InlineKeyboardButton("✅ Одобрить", callback_data=f"set_status_{order_id}_approved"),
             InlineKeyboardButton("❌ Отклонить", callback_data=f"set_status_{order_id}_rejected")
         ],
         [InlineKeyboardButton("🔙 К заказам", callback_data="admin_orders")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-def reject_reason_keyboard(order_id: int) -> InlineKeyboardMarkup:
-    """Просто запрашиваем причину отказа"""
-    keyboard = [
-        [InlineKeyboardButton("📝 Ввести причину", callback_data=f"reject_reason_{order_id}_custom")],
-        [InlineKeyboardButton("🔙 Назад", callback_data=f"admin_order_{order_id}")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -1690,7 +1679,7 @@ def admin_delete_product_yes(update: Update, context: CallbackContext):
     query.edit_message_text("✅ Товар удалён.")
     query.message.reply_text("🔧 Админ-панель:", reply_markup=admin_menu_keyboard())
 
-# -------------------- УПРОЩЕННЫЕ АДМИН ОБРАБОТЧИКИ (ЗАКАЗЫ) --------------------
+# -------------------- АДМИН ОБРАБОТЧИКИ (ЗАКАЗЫ) --------------------
 def admin_orders(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
@@ -1768,67 +1757,44 @@ def admin_order_detail(update: Update, context: CallbackContext):
     )
 
 def admin_set_order_status(update: Update, context: CallbackContext):
+    """Обработчик установки статуса заказа"""
     query = update.callback_query
     query.answer()
+    
     parts = query.data.split('_')
     order_id = int(parts[2])
     status = parts[3]
     
-    order = get_order(order_id)
+    if status == 'approved':
+        # Просто одобряем заказ
+        update_order_status(order_id, 'approved')
+        
+        # Отправляем уведомление пользователю
+        order = get_order(order_id)
+        if order:
+            user_id = order['user_id']
+            message = (
+                f"✅ *Ваш заказ #{order_id} одобрен!*\n\n"
+                f"Напишите админу для отправки: @matpluuux"
+            )
+            try:
+                context.bot.send_message(user_id, message, parse_mode=ParseMode.MARKDOWN)
+            except Exception as e:
+                logger.error(f"Failed to notify user {user_id}: {e}")
+        
+        # Возвращаемся к деталям заказа
+        admin_order_detail(update, context)
     
-    if status == 'rejected':
-        # Спрашиваем причину отказа
+    elif status == 'rejected':
+        # Запрашиваем причину отказа
         query.edit_message_text(
-            "❌ Введите причину отказа (одним сообщением):",
-            reply_markup=reject_reason_keyboard(order_id)
+            "❌ Введите причину отказа (одним сообщением):"
         )
         context.user_data['reject_order_id'] = order_id
         return ORDER_REJECT_REASON
-    
-    # Если одобрение - просто обновляем статус
-    update_order_status(order_id, status)
-    
-    # Отправляем уведомление пользователю
-    if order:
-        user_id = order['user_id']
-        message = (
-            f"✅ *Ваш заказ #{order_id} одобрен!*\n\n"
-            f"Напишите админу для отправки: @matpluuux"
-        )
-        try:
-            context.bot.send_message(user_id, message, parse_mode=ParseMode.MARKDOWN)
-        except Exception as e:
-            logger.error(f"Failed to notify user {user_id}: {e}")
-    
-    # Показываем обновлённый заказ
-    order = get_order(order_id)
-    if order:
-        status_display = ORDER_STATUSES.get(order['status'], order['status'])
-        text = f"📦 *Заказ #{order['id']}*\n"
-        text += f"📅 *Дата:* {order['created_at']}\n"
-        text += f"👤 *Пользователь:* {order.get('username', order['user_id'])}\n"
-        text += f"📞 *Контакт:* {order['contact']}\n"
-        text += f"🏙 *Адрес:* {order['address']}\n"
-        if order['comment']:
-            text += f"📝 *Комментарий:* {order['comment']}\n"
-        text += f"📌 *Статус:* {status_display}\n"
-        text += "🛍 *Состав:*\n"
-        for item in order['items']:
-            text += f"  • {item['name']} x{item['quantity']} = {item['price']*item['quantity']} BYN"
-            if item['size']:
-                text += f" (размер {item['size']})"
-            text += "\n"
-        text += f"💰 *Итого: {order['total_price']} BYN*"
-        
-        query.edit_message_text(
-            text,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=admin_order_detail_keyboard(order_id)
-        )
 
 def admin_custom_reject_reason(update: Update, context: CallbackContext):
     """Получение своей причины отказа"""
-    user_id = update.effective_user.id
     reason = update.message.text.strip()
     
     order_id = context.user_data.get('reject_order_id')
@@ -1855,6 +1821,10 @@ def admin_custom_reject_reason(update: Update, context: CallbackContext):
     
     update.message.reply_text(f"✅ Заказ #{order_id} отклонён с причиной: {reason}")
     
+    # Очищаем данные
+    if 'reject_order_id' in context.user_data:
+        del context.user_data['reject_order_id']
+    
     # Возвращаемся к списку заказов
     admin_orders(update, context)
     
@@ -1878,13 +1848,20 @@ def admin_stats(update: Update, context: CallbackContext):
     )
     query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
 
-# -------------------- ОБРАБОТЧИКИ РАССЫЛКИ --------------------
+# -------------------- ИСПРАВЛЕННЫЙ ОБРАБОТЧИК РАССЫЛКИ --------------------
 def admin_mailing(update: Update, context: CallbackContext):
+    """Начало рассылки"""
     query = update.callback_query
     query.answer()
     if not is_admin(query.from_user.id):
         query.answer("⛔ Доступ запрещён.", show_alert=True)
-        return
+        return ConversationHandler.END
+    
+    # Очищаем старые данные рассылки
+    if 'mailing_text' in context.user_data:
+        del context.user_data['mailing_text']
+    if 'mailing_users' in context.user_data:
+        del context.user_data['mailing_users']
     
     query.edit_message_text(
         "📨 Введите текст для рассылки (можно использовать Markdown):\n"
@@ -1893,6 +1870,7 @@ def admin_mailing(update: Update, context: CallbackContext):
     return MAILING_TEXT
 
 def admin_mailing_text(update: Update, context: CallbackContext):
+    """Получение текста рассылки"""
     if update.message.text == '/cancel':
         return cancel_command(update, context)
     
@@ -1913,6 +1891,7 @@ def admin_mailing_text(update: Update, context: CallbackContext):
     return MAILING_CONFIRM
 
 def admin_mailing_send(update: Update, context: CallbackContext):
+    """Отправка рассылки"""
     query = update.callback_query
     query.answer()
     
@@ -1940,23 +1919,38 @@ def admin_mailing_send(update: Update, context: CallbackContext):
             logger.error(f"Failed to send to {user['telegram_id']}: {e}")
             failed += 1
     
+    # Отправляем отчет
     query.message.reply_text(
         f"✅ Рассылка завершена!\n"
         f"📨 Успешно отправлено: {success}\n"
         f"❌ Не удалось отправить: {failed}"
     )
+    
+    # Возвращаемся в админ-панель
     query.message.reply_text("🔧 Админ-панель:", reply_markup=admin_menu_keyboard())
     
-    context.user_data.clear()
+    # Очищаем данные рассылки
+    if 'mailing_text' in context.user_data:
+        del context.user_data['mailing_text']
+    if 'mailing_users' in context.user_data:
+        del context.user_data['mailing_users']
+    
     return ConversationHandler.END
 
 def admin_mailing_cancel(update: Update, context: CallbackContext):
+    """Отмена рассылки"""
     query = update.callback_query
     query.answer()
+    
+    # Очищаем данные рассылки
+    if 'mailing_text' in context.user_data:
+        del context.user_data['mailing_text']
+    if 'mailing_users' in context.user_data:
+        del context.user_data['mailing_users']
+    
     query.edit_message_text("❌ Рассылка отменена.")
     query.message.reply_text("🔧 Админ-панель:", reply_markup=admin_menu_keyboard())
     
-    context.user_data.clear()
     return ConversationHandler.END
 
 # -------------------- ОБРАБОТЧИКИ ПОИСКА --------------------
@@ -2077,7 +2071,7 @@ def main():
     )
     dp.add_handler(add_product_conv)
 
-    # Рассылка
+    # Рассылка - ИСПРАВЛЕНО
     mailing_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_mailing, pattern='^admin_mailing$')],
         states={
@@ -2086,20 +2080,25 @@ def main():
                               CallbackQueryHandler(admin_mailing_cancel, pattern='^mailing_cancel$')]
         },
         fallbacks=[CommandHandler('cancel', cancel_command)],
-        per_message=False
+        per_message=False,
+        allow_reentry=False  # Запрещаем повторный вход
     )
     dp.add_handler(mailing_conv)
 
-    # Причина отказа
+    # Причина отказа - ИСПРАВЛЕНО
     reject_reason_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_set_order_status, pattern='^set_status_.*_rejected$')],
         states={
             ORDER_REJECT_REASON: [MessageHandler(Filters.text & ~Filters.command, admin_custom_reject_reason)]
         },
         fallbacks=[CommandHandler('cancel', cancel_command)],
-        per_message=False
+        per_message=False,
+        allow_reentry=False
     )
     dp.add_handler(reject_reason_conv)
+
+    # Одобрение заказа
+    dp.add_handler(CallbackQueryHandler(admin_set_order_status, pattern='^set_status_.*_approved$'))
 
     # Текстовые кнопки
     dp.add_handler(MessageHandler(Filters.regex('^🛍 Ассортимент$'), handle_assortment))
@@ -2140,7 +2139,6 @@ def main():
     dp.add_handler(CallbackQueryHandler(admin_orders, pattern='^admin_orders$'))
     dp.add_handler(CallbackQueryHandler(admin_orders_page, pattern='^admin_orders_page_'))
     dp.add_handler(CallbackQueryHandler(admin_order_detail, pattern='^admin_order_'))
-    dp.add_handler(CallbackQueryHandler(admin_set_order_status, pattern='^set_status_.*_approved$'))
     
     dp.add_handler(CallbackQueryHandler(admin_stats, pattern='^admin_stats$'))
     dp.add_handler(CallbackQueryHandler(callback_admin_back, pattern='^admin_back$'))
