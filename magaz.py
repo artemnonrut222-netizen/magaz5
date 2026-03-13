@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-RAWWEAR Telegram Shop Bot - ИСПРАВЛЕННАЯ ВЕРСИЯ
+RAWWEAR Telegram Shop Bot - ИСПРАВЛЕННАЯ ВЕРСИЯ С МИГРАЦИЕЙ БД
 """
 
 import logging
@@ -53,7 +53,7 @@ ORDER_STATUSES = {
     'rejected': '❌ Отклонён'
 }
 
-# -------------------- ИНИЦИАЛИЗАЦИЯ БД --------------------
+# -------------------- ИНИЦИАЛИЗАЦИЯ БД С МИГРАЦИЕЙ --------------------
 @contextmanager
 def db_connection():
     conn = sqlite3.connect(DATABASE)
@@ -68,8 +68,37 @@ def db_connection():
     finally:
         conn.close()
 
+def migrate_db():
+    """Добавляет отсутствующие колонки в существующую БД"""
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Проверяем, есть ли колонка reject_reason в таблице orders
+        cursor.execute("PRAGMA table_info(orders)")
+        columns = [column['name'] for column in cursor.fetchall()]
+        
+        if 'reject_reason' not in columns:
+            logger.info("Adding reject_reason column to orders table...")
+            cursor.execute("ALTER TABLE orders ADD COLUMN reject_reason TEXT")
+            logger.info("Column added successfully")
+        
+        # Проверяем, есть ли таблица user_messages
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                message_type TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_messages_user ON user_messages(user_id)")
+        
+        logger.info("Database migration completed")
+
 def init_db():
-    """Создание таблиц с правильной структурой"""
+    """Создание таблиц если их нет"""
     with db_connection() as conn:
         cursor = conn.cursor()
 
@@ -139,7 +168,7 @@ def init_db():
             )
         """)
 
-        # Заказы - с колонкой reject_reason
+        # Заказы - создаем без reject_reason, добавим через миграцию
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -149,7 +178,6 @@ def init_db():
                 contact TEXT,
                 address TEXT,
                 comment TEXT,
-                reject_reason TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -168,24 +196,11 @@ def init_db():
             )
         """)
 
-        # Таблица для отслеживания сообщений
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                message_id INTEGER NOT NULL,
-                chat_id INTEGER NOT NULL,
-                message_type TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
         # Индексы
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_cart_user ON cart(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_product_images_product ON product_images(product_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_subcategory ON products(subcategory_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_messages_user ON user_messages(user_id)")
 
         # Заполнение начальными данными
         for cat_name in ['Одежда', 'Обувь', 'Аксессуары']:
@@ -231,6 +246,9 @@ def init_db():
                 SELECT MIN(id) FROM subcategories GROUP BY category_id, name
             )
         """)
+    
+    # Запускаем миграцию для добавления новых колонок
+    migrate_db()
 
 # -------------------- ФУНКЦИИ ДЛЯ РАБОТЫ С СООБЩЕНИЯМИ --------------------
 def save_message(user_id: int, chat_id: int, message_id: int, message_type: str = "regular"):
@@ -1853,6 +1871,7 @@ def admin_mailing(update: Update, context: CallbackContext):
     """Начало рассылки"""
     query = update.callback_query
     query.answer()
+    
     if not is_admin(query.from_user.id):
         query.answer("⛔ Доступ запрещён.", show_alert=True)
         return ConversationHandler.END
@@ -1883,6 +1902,15 @@ def admin_mailing_text(update: Update, context: CallbackContext):
     preview = f"📨 *Превью рассылки:*\n\n{text}\n\n"
     preview += f"📊 *Всего получателей:* {len(users)}"
     
+    # Удаляем предыдущее сообщение с запросом текста
+    try:
+        context.bot.delete_message(
+            chat_id=update.message.chat_id,
+            message_id=update.message.message_id - 1
+        )
+    except:
+        pass
+    
     update.message.reply_text(
         preview,
         parse_mode=ParseMode.MARKDOWN,
@@ -1895,12 +1923,14 @@ def admin_mailing_send(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     
-    text = context.user_data.get('mailing_text')
-    users = context.user_data.get('mailing_users', [])
-    
-    if not text or not users:
-        query.edit_message_text("❌ Ошибка: данные рассылки не найдены.")
+    # Проверяем, есть ли данные рассылки
+    if 'mailing_text' not in context.user_data or 'mailing_users' not in context.user_data:
+        query.edit_message_text("❌ Ошибка: данные рассылки не найдены. Начните заново.")
+        query.message.reply_text("🔧 Админ-панель:", reply_markup=admin_menu_keyboard())
         return ConversationHandler.END
+    
+    text = context.user_data['mailing_text']
+    users = context.user_data['mailing_users']
     
     query.edit_message_text("📨 Рассылка началась... Это может занять некоторое время.")
     
@@ -2015,8 +2045,9 @@ def callback_ignore(update: Update, context: CallbackContext):
 
 # -------------------- ОСНОВНАЯ ФУНКЦИЯ --------------------
 def main():
+    # Инициализация БД с миграцией
     init_db()
-    logger.info("Database initialized")
+    logger.info("Database initialized and migrated")
 
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
@@ -2081,7 +2112,7 @@ def main():
         },
         fallbacks=[CommandHandler('cancel', cancel_command)],
         per_message=False,
-        allow_reentry=False  # Запрещаем повторный вход
+        allow_reentry=False
     )
     dp.add_handler(mailing_conv)
 
