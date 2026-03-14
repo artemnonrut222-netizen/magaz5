@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-RAWWEAR Telegram Shop Bot - ИСПРАВЛЕННАЯ ВЕРСИЯ С МИГРАЦИЕЙ БД
+RAWWEAR Telegram Shop Bot - ФИНАЛЬНАЯ ВЕРСИЯ
 """
 
 import logging
@@ -53,7 +53,7 @@ ORDER_STATUSES = {
     'rejected': '❌ Отклонён'
 }
 
-# -------------------- ИНИЦИАЛИЗАЦИЯ БД С МИГРАЦИЕЙ --------------------
+# -------------------- ИНИЦИАЛИЗАЦИЯ БД --------------------
 @contextmanager
 def db_connection():
     conn = sqlite3.connect(DATABASE)
@@ -67,35 +67,6 @@ def db_connection():
         raise
     finally:
         conn.close()
-
-def migrate_db():
-    """Добавляет отсутствующие колонки в существующую БД"""
-    with db_connection() as conn:
-        cursor = conn.cursor()
-        
-        # Проверяем, есть ли колонка reject_reason в таблице orders
-        cursor.execute("PRAGMA table_info(orders)")
-        columns = [column['name'] for column in cursor.fetchall()]
-        
-        if 'reject_reason' not in columns:
-            logger.info("Adding reject_reason column to orders table...")
-            cursor.execute("ALTER TABLE orders ADD COLUMN reject_reason TEXT")
-            logger.info("Column added successfully")
-        
-        # Проверяем, есть ли таблица user_messages
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                message_id INTEGER NOT NULL,
-                chat_id INTEGER NOT NULL,
-                message_type TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_messages_user ON user_messages(user_id)")
-        
-        logger.info("Database migration completed")
 
 def init_db():
     """Создание таблиц если их нет"""
@@ -168,7 +139,7 @@ def init_db():
             )
         """)
 
-        # Заказы - создаем без reject_reason, добавим через миграцию
+        # Заказы
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,6 +149,7 @@ def init_db():
                 contact TEXT,
                 address TEXT,
                 comment TEXT,
+                reject_reason TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -196,11 +168,24 @@ def init_db():
             )
         """)
 
+        # Сообщения пользователей
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                message_type TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Индексы
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_cart_user ON cart(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_product_images_product ON product_images(product_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_subcategory ON products(subcategory_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_messages_user ON user_messages(user_id)")
 
         # Заполнение начальными данными
         for cat_name in ['Одежда', 'Обувь', 'Аксессуары']:
@@ -246,9 +231,6 @@ def init_db():
                 SELECT MIN(id) FROM subcategories GROUP BY category_id, name
             )
         """)
-    
-    # Запускаем миграцию для добавления новых колонок
-    migrate_db()
 
 # -------------------- ФУНКЦИИ ДЛЯ РАБОТЫ С СООБЩЕНИЯМИ --------------------
 def save_message(user_id: int, chat_id: int, message_id: int, message_type: str = "regular"):
@@ -501,7 +483,6 @@ def get_user_orders(user_id: int) -> List[Dict[str, Any]]:
         return orders
 
 def update_order_status(order_id: int, status: str, reject_reason: str = ""):
-    """Обновляет статус заказа с правильной обработкой reject_reason"""
     with db_connection() as conn:
         cursor = conn.cursor()
         if status == 'rejected':
@@ -551,7 +532,6 @@ def get_statistics() -> Dict[str, Any]:
         }
 
 def get_all_users() -> List[Dict[str, Any]]:
-    """Возвращает всех пользователей бота"""
     with db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT telegram_id, username FROM users ORDER BY created_at DESC")
@@ -747,7 +727,6 @@ def admin_orders_keyboard(orders: List[Dict[str, Any]], page: int = 1, total_pag
     return InlineKeyboardMarkup(keyboard)
 
 def admin_order_detail_keyboard(order_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура с 3 статусами"""
     keyboard = [
         [
             InlineKeyboardButton("✅ Одобрить", callback_data=f"set_status_{order_id}_approved"),
@@ -818,6 +797,16 @@ def mailing_confirm_keyboard() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(keyboard)
 
+def admin_photo_options_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [
+            InlineKeyboardButton("➕ Добавить ещё фото", callback_data="admin_add_more_photo"),
+            InlineKeyboardButton("⏭ Пропустить фото", callback_data="admin_skip_photos")
+        ],
+        [InlineKeyboardButton("❌ Отменить добавление", callback_data="admin_cancel_add")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 # -------------------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ --------------------
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
@@ -833,6 +822,39 @@ def notify_admins(bot, message: str):
             bot.send_message(admin_id, message, parse_mode=ParseMode.HTML)
         except Exception as e:
             logger.error(f"Failed to notify admin {admin_id}: {e}")
+
+def cancel_conversation(update: Update, context: CallbackContext, message: str = "❌ Действие отменено."):
+    """Универсальная функция отмены любой операции"""
+    user_id = update.effective_user.id
+    
+    # Удаляем все сообщения, связанные с текущей операцией
+    messages = delete_user_messages(user_id)
+    for chat_id, msg_id in messages:
+        try:
+            context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except:
+            pass
+    
+    # Очищаем данные пользователя
+    context.user_data.clear()
+    
+    # Отправляем сообщение об отмене
+    if update.callback_query:
+        query = update.callback_query
+        query.answer()
+        query.edit_message_text(message)
+        query.message.reply_text(
+            "🏠 Главное меню:",
+            reply_markup=get_main_menu_keyboard(is_admin(user_id))
+        )
+    elif update.message:
+        sent_msg = update.message.reply_text(
+            message,
+            reply_markup=get_main_menu_keyboard(is_admin(user_id))
+        )
+        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "menu")
+    
+    return ConversationHandler.END
 
 # -------------------- ОБРАБОТЧИКИ КОМАНД --------------------
 def start(update: Update, context: CallbackContext):
@@ -869,30 +891,22 @@ def start(update: Update, context: CallbackContext):
     save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "menu")
 
 def search_command(update: Update, context: CallbackContext):
-    sent_msg = update.message.reply_text("🔍 Введите название товара для поиска:")
+    # Создаем клавиатуру с кнопкой отмены
+    keyboard = [[InlineKeyboardButton("❌ Отменить поиск", callback_data="cancel_search")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    sent_msg = update.message.reply_text(
+        "🔍 Введите название товара для поиска:",
+        reply_markup=reply_markup
+    )
     save_message(update.effective_user.id, sent_msg.chat_id, sent_msg.message_id, "search")
     return SEARCH_QUERY
 
-def cancel_command(update: Update, context: CallbackContext):
-    """Обработчик команды /cancel - удаляет все сообщения пользователя"""
-    user_id = update.effective_user.id
-    
-    messages = delete_user_messages(user_id)
-    for chat_id, msg_id in messages:
-        try:
-            context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        except:
-            pass
-    
-    context.user_data.clear()
-    
-    sent_msg = update.message.reply_text(
-        "❌ Действие отменено. Все временные сообщения удалены.",
-        reply_markup=get_main_menu_keyboard(is_admin(user_id))
-    )
-    save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "menu")
-    
-    return ConversationHandler.END
+def cancel_search(update: Update, context: CallbackContext):
+    """Отмена поиска"""
+    query = update.callback_query
+    query.answer()
+    return cancel_conversation(update, context, "🔍 Поиск отменён.")
 
 # -------------------- ОБРАБОТЧИКИ ТЕКСТОВЫХ КНОПОК --------------------
 def handle_assortment(update: Update, context: CallbackContext):
@@ -1284,8 +1298,13 @@ def checkout_start(update: Update, context: CallbackContext):
     
     delete_user_messages(user_id, "checkout")
     
+    # Клавиатура с отменой
+    keyboard = [[InlineKeyboardButton("❌ Отменить оформление", callback_data="checkout_cancel")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     sent_msg = query.message.reply_text(
-        "📞 Напишите свой юзернейм или номер телефона, чтобы мы могли связаться с вами."
+        "📞 Напишите свой юзернейм или номер телефона, чтобы мы могли связаться с вами.",
+        reply_markup=reply_markup
     )
     save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "checkout")
     return CHECKOUT_CONTACT
@@ -1297,7 +1316,14 @@ def checkout_contact(update: Update, context: CallbackContext):
     
     save_message(user_id, update.message.chat_id, update.message.message_id, "checkout")
     
-    sent_msg = update.message.reply_text("🏙 Введите ваш город и адрес доставки.")
+    # Клавиатура с отменой
+    keyboard = [[InlineKeyboardButton("❌ Отменить оформление", callback_data="checkout_cancel")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    sent_msg = update.message.reply_text(
+        "🏙 Введите ваш город и адрес доставки.",
+        reply_markup=reply_markup
+    )
     save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "checkout")
     return CHECKOUT_ADDRESS
 
@@ -1308,7 +1334,14 @@ def checkout_address(update: Update, context: CallbackContext):
     
     save_message(user_id, update.message.chat_id, update.message.message_id, "checkout")
     
-    sent_msg = update.message.reply_text("📝 Введите комментарий к заказу (необязательно). Можно отправить прочерк '-'.")
+    # Клавиатура с отменой
+    keyboard = [[InlineKeyboardButton("❌ Отменить оформление", callback_data="checkout_cancel")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    sent_msg = update.message.reply_text(
+        "📝 Введите комментарий к заказу (необязательно). Можно отправить прочерк '-'.",
+        reply_markup=reply_markup
+    )
     save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "checkout")
     return CHECKOUT_COMMENT
 
@@ -1395,13 +1428,9 @@ def checkout_confirm(update: Update, context: CallbackContext):
     return ConversationHandler.END
 
 def checkout_cancel(update: Update, context: CallbackContext):
-    query = update.callback_query
-    query.answer()
-    user_id = query.from_user.id
-    
-    delete_user_messages(user_id, "checkout")
-    
-    query.edit_message_text("❌ Оформление заказа отменено.")
+    """Отмена оформления заказа"""
+    if update.callback_query:
+        return cancel_conversation(update, context, "❌ Оформление заказа отменено.")
     return ConversationHandler.END
 
 # -------------------- ОБРАБОТЧИКИ ЗАКАЗОВ ПОЛЬЗОВАТЕЛЯ --------------------
@@ -1459,7 +1488,7 @@ def callback_user_orders_page(update: Update, context: CallbackContext):
         reply_markup=user_orders_keyboard(page_orders, page, total_pages)
     )
 
-# -------------------- ИСПРАВЛЕННЫЕ АДМИН ОБРАБОТЧИКИ (ДОБАВЛЕНИЕ ТОВАРА) --------------------
+# -------------------- АДМИН ОБРАБОТЧИКИ (ДОБАВЛЕНИЕ ТОВАРА) --------------------
 def admin_add_product_start(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
@@ -1505,62 +1534,30 @@ def admin_choose_subcategory(update: Update, context: CallbackContext):
     subcategory_id = int(query.data.split('_')[2])
     context.user_data['subcategory_id'] = subcategory_id
     
+    # Клавиатура с отменой
+    keyboard = [[InlineKeyboardButton("❌ Отменить добавление", callback_data="admin_cancel_add")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     query.edit_message_text(
-        "📝 Введите название товара (или /cancel для отмены):"
+        "📝 Введите название товара:",
+        reply_markup=reply_markup
     )
     return ADD_PRODUCT_NAME
-
-def admin_cancel_add(update: Update, context: CallbackContext):
-    """Отмена добавления товара с удалением всех сообщений"""
-    user_id = None
-    chat_id = None
-    
-    if update.callback_query:
-        query = update.callback_query
-        query.answer()
-        user_id = query.from_user.id
-        chat_id = query.message.chat_id
-        
-        # Удаляем все сообщения с типом admin_add
-        messages = delete_user_messages(user_id, "admin_add")
-        for msg_chat_id, msg_id in messages:
-            try:
-                context.bot.delete_message(chat_id=msg_chat_id, message_id=msg_id)
-            except:
-                pass
-        
-        query.edit_message_text("❌ Добавление товара отменено.")
-        query.message.reply_text("🔧 Админ-панель:", reply_markup=admin_menu_keyboard())
-    
-    elif update.message:
-        user_id = update.effective_user.id
-        chat_id = update.message.chat_id
-        
-        # Удаляем все сообщения с типом admin_add
-        messages = delete_user_messages(user_id, "admin_add")
-        for msg_chat_id, msg_id in messages:
-            try:
-                context.bot.delete_message(chat_id=msg_chat_id, message_id=msg_id)
-            except:
-                pass
-        
-        update.message.reply_text("❌ Добавление товара отменено.")
-        update.message.reply_text("🔧 Админ-панель:", reply_markup=admin_menu_keyboard())
-    
-    # Очищаем данные пользователя
-    context.user_data.clear()
-    
-    return ConversationHandler.END
 
 def admin_add_product_name(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     save_message(user_id, update.message.chat_id, update.message.message_id, "admin_add")
     
-    if update.message.text == '/cancel':
-        return admin_cancel_add(update, context)
-    
     context.user_data['name'] = update.message.text
-    sent_msg = update.message.reply_text("📄 Введите описание товара (или /cancel для отмены):")
+    
+    # Клавиатура с отменой
+    keyboard = [[InlineKeyboardButton("❌ Отменить добавление", callback_data="admin_cancel_add")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    sent_msg = update.message.reply_text(
+        "📄 Введите описание товара:",
+        reply_markup=reply_markup
+    )
     save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin_add")
     return ADD_PRODUCT_DESCRIPTION
 
@@ -1568,11 +1565,16 @@ def admin_add_product_description(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     save_message(user_id, update.message.chat_id, update.message.message_id, "admin_add")
     
-    if update.message.text == '/cancel':
-        return admin_cancel_add(update, context)
-    
     context.user_data['description'] = update.message.text
-    sent_msg = update.message.reply_text("💰 Введите цену товара (только число, в BYN):")
+    
+    # Клавиатура с отменой
+    keyboard = [[InlineKeyboardButton("❌ Отменить добавление", callback_data="admin_cancel_add")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    sent_msg = update.message.reply_text(
+        "💰 Введите цену товара (только число, в BYN):",
+        reply_markup=reply_markup
+    )
     save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin_add")
     return ADD_PRODUCT_PRICE
 
@@ -1580,22 +1582,31 @@ def admin_add_product_price(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     save_message(user_id, update.message.chat_id, update.message.message_id, "admin_add")
     
-    if update.message.text == '/cancel':
-        return admin_cancel_add(update, context)
-    
     try:
         price = int(update.message.text)
         if price <= 0:
             raise ValueError
     except ValueError:
-        sent_msg = update.message.reply_text("❌ Цена должна быть положительным целым числом. Попробуйте снова:")
+        # Клавиатура с отменой
+        keyboard = [[InlineKeyboardButton("❌ Отменить добавление", callback_data="admin_cancel_add")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        sent_msg = update.message.reply_text(
+            "❌ Цена должна быть положительным целым числом. Попробуйте снова:",
+            reply_markup=reply_markup
+        )
         save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin_add")
         return ADD_PRODUCT_PRICE
     
     context.user_data['price'] = price
+    
+    # Клавиатура с отменой
+    keyboard = [[InlineKeyboardButton("❌ Отменить добавление", callback_data="admin_cancel_add")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     sent_msg = update.message.reply_text(
-        "📏 Введите размеры через запятую (например: S,M,L,XL,36,37,38) или отправьте прочерк (-), если размеров нет:\n"
-        "(или /cancel для отмены)"
+        "📏 Введите размеры через запятую (например: S,M,L,XL,36,37,38) или отправьте прочерк (-), если размеров нет:",
+        reply_markup=reply_markup
     )
     save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin_add")
     return ADD_PRODUCT_SIZES
@@ -1604,18 +1615,14 @@ def admin_add_product_sizes(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     save_message(user_id, update.message.chat_id, update.message.message_id, "admin_add")
     
-    if update.message.text == '/cancel':
-        return admin_cancel_add(update, context)
-    
     sizes = update.message.text.strip()
     if sizes == '-':
         sizes = ''
     context.user_data['sizes'] = sizes
     
     sent_msg = update.message.reply_text(
-        "🖼 Отправьте фото товара (можно несколько).\n"
-        "После каждого фото появится меню для добавления следующего.\n"
-        "Отправьте /skip чтобы пропустить фото, /cancel для отмены."
+        "🖼 Отправьте фото товара (можно несколько).",
+        reply_markup=admin_photo_options_keyboard()
     )
     save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin_add")
     return ADD_PRODUCT_PHOTO
@@ -1624,14 +1631,6 @@ def admin_add_product_photo(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     save_message(user_id, update.message.chat_id, update.message.message_id, "admin_add")
     
-    # Проверяем на отмену
-    if update.message.text and update.message.text == '/cancel':
-        return admin_cancel_add(update, context)
-    
-    # Проверяем на пропуск
-    if update.message.text and update.message.text == '/skip':
-        return admin_finish_product_creation(update, context, with_photos=False)
-    
     # Обработка фото
     if update.message.photo:
         photos = context.user_data.get('photos', [])
@@ -1639,20 +1638,17 @@ def admin_add_product_photo(update: Update, context: CallbackContext):
         photos.append(file_id)
         context.user_data['photos'] = photos
         
-        keyboard = [
-            [
-                InlineKeyboardButton("➕ Добавить ещё фото", callback_data="admin_add_more_photo"),
-                InlineKeyboardButton("✅ Закончить", callback_data="admin_finish_photos")
-            ]
-        ]
         sent_msg = update.message.reply_text(
-            f"🖼 Фото {len(photos)} добавлено. Хотите добавить ещё?",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            f"🖼 Фото {len(photos)} добавлено. Выберите действие:",
+            reply_markup=admin_photo_options_keyboard()
         )
         save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin_add")
         return ADD_PRODUCT_PHOTO
     else:
-        sent_msg = update.message.reply_text("❌ Пожалуйста, отправьте фото или используйте команду /skip")
+        sent_msg = update.message.reply_text(
+            "❌ Пожалуйста, отправьте фото или выберите действие на клавиатуре:",
+            reply_markup=admin_photo_options_keyboard()
+        )
         save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin_add")
         return ADD_PRODUCT_PHOTO
 
@@ -1661,11 +1657,17 @@ def admin_add_more_photo(update: Update, context: CallbackContext):
     query.answer()
     user_id = query.from_user.id
     
-    # Сохраняем сообщение
     save_message(user_id, query.message.chat_id, query.message.message_id, "admin_add")
     
-    query.edit_message_text("🖼 Отправьте следующее фото (или /skip для пропуска):")
+    query.edit_message_text("🖼 Отправьте следующее фото:")
     return ADD_PRODUCT_PHOTO
+
+def admin_skip_photos(update: Update, context: CallbackContext):
+    """Пропуск добавления фото"""
+    query = update.callback_query
+    query.answer()
+    
+    return admin_finish_product_creation(update, context, with_photos=False)
 
 def admin_finish_photos(update: Update, context: CallbackContext):
     """Завершение добавления с фото"""
@@ -1677,7 +1679,6 @@ def admin_finish_photos(update: Update, context: CallbackContext):
 def admin_finish_product_creation(update, context, with_photos=True):
     """Общая функция для завершения создания товара"""
     user_id = None
-    chat_id = None
     
     if isinstance(update, CallbackQuery):
         query = update
@@ -1741,6 +1742,12 @@ def admin_finish_product_creation(update, context, with_photos=True):
     context.user_data.clear()
     return ConversationHandler.END
 
+def admin_cancel_add(update: Update, context: CallbackContext):
+    """Отмена добавления товара"""
+    if update.callback_query:
+        return cancel_conversation(update, context, "❌ Добавление товара отменено.")
+    return ConversationHandler.END
+
 # -------------------- АДМИН ОБРАБОТЧИКИ (УДАЛЕНИЕ ТОВАРОВ) --------------------
 def admin_delete_product_start(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -1758,17 +1765,11 @@ def admin_delete_product_start(update: Update, context: CallbackContext):
     for prod in products:
         keyboard.append([InlineKeyboardButton(f"❌ {prod['name']}", callback_data=f"adm_del_prod_{prod['id']}")])
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="admin_back")])
-    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="admin_cancel_delete")])
     
     query.edit_message_text(
         "🗑 Выберите товар для удаления:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-
-def admin_cancel_delete(update: Update, context: CallbackContext):
-    query = update.callback_query
-    query.answer()
-    query.edit_message_text("🔧 Админ-панель:", reply_markup=admin_menu_keyboard())
 
 def admin_delete_product_confirm(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -1906,9 +1907,13 @@ def admin_set_order_status(update: Update, context: CallbackContext):
         admin_order_detail(update, context)
     
     elif status == 'rejected':
-        # Запрашиваем причину отказа
+        # Запрашиваем причину отказа с возможностью отмены
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="admin_back")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         query.edit_message_text(
-            "❌ Введите причину отказа (одним сообщением):"
+            "❌ Введите причину отказа (одним сообщением):",
+            reply_markup=reply_markup
         )
         context.user_data['reject_order_id'] = order_id
         return ORDER_REJECT_REASON
@@ -1968,7 +1973,7 @@ def admin_stats(update: Update, context: CallbackContext):
     )
     query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
 
-# -------------------- ИСПРАВЛЕННЫЙ ОБРАБОТЧИК РАССЫЛКИ --------------------
+# -------------------- АДМИН ОБРАБОТЧИКИ (РАССЫЛКА) --------------------
 def admin_mailing(update: Update, context: CallbackContext):
     """Начало рассылки"""
     query = update.callback_query
@@ -1984,17 +1989,18 @@ def admin_mailing(update: Update, context: CallbackContext):
     if 'mailing_users' in context.user_data:
         del context.user_data['mailing_users']
     
+    # Клавиатура с отменой
+    keyboard = [[InlineKeyboardButton("❌ Отменить рассылку", callback_data="mailing_cancel")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     query.edit_message_text(
-        "📨 Введите текст для рассылки (можно использовать Markdown):\n"
-        "Отправьте /cancel для отмены."
+        "📨 Введите текст для рассылки (можно использовать Markdown):",
+        reply_markup=reply_markup
     )
     return MAILING_TEXT
 
 def admin_mailing_text(update: Update, context: CallbackContext):
     """Получение текста рассылки"""
-    if update.message.text == '/cancel':
-        return cancel_command(update, context)
-    
     text = update.message.text
     context.user_data['mailing_text'] = text
     
@@ -2071,18 +2077,8 @@ def admin_mailing_send(update: Update, context: CallbackContext):
 
 def admin_mailing_cancel(update: Update, context: CallbackContext):
     """Отмена рассылки"""
-    query = update.callback_query
-    query.answer()
-    
-    # Очищаем данные рассылки
-    if 'mailing_text' in context.user_data:
-        del context.user_data['mailing_text']
-    if 'mailing_users' in context.user_data:
-        del context.user_data['mailing_users']
-    
-    query.edit_message_text("❌ Рассылка отменена.")
-    query.message.reply_text("🔧 Админ-панель:", reply_markup=admin_menu_keyboard())
-    
+    if update.callback_query:
+        return cancel_conversation(update, context, "❌ Рассылка отменена.")
     return ConversationHandler.END
 
 # -------------------- ОБРАБОТЧИКИ ПОИСКА --------------------
@@ -2147,16 +2143,15 @@ def callback_ignore(update: Update, context: CallbackContext):
 
 # -------------------- ОСНОВНАЯ ФУНКЦИЯ --------------------
 def main():
-    # Инициализация БД с миграцией
+    # Инициализация БД
     init_db()
-    logger.info("Database initialized and migrated")
+    logger.info("Database initialized")
 
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
 
     # Команды
     dp.add_handler(CommandHandler('start', start))
-    dp.add_handler(CommandHandler('cancel', cancel_command))
 
     # Поиск
     search_conv = ConversationHandler(
@@ -2164,7 +2159,7 @@ def main():
         states={
             SEARCH_QUERY: [MessageHandler(Filters.text & ~Filters.command, search_query)]
         },
-        fallbacks=[CommandHandler('cancel', cancel_command)]
+        fallbacks=[CallbackQueryHandler(cancel_search, pattern='^cancel_search$')]
     )
     dp.add_handler(search_conv)
 
@@ -2175,15 +2170,14 @@ def main():
             CHECKOUT_CONTACT: [MessageHandler(Filters.text & ~Filters.command, checkout_contact)],
             CHECKOUT_ADDRESS: [MessageHandler(Filters.text & ~Filters.command, checkout_address)],
             CHECKOUT_COMMENT: [MessageHandler(Filters.text & ~Filters.command, checkout_comment)],
-            CHECKOUT_CONFIRM: [CallbackQueryHandler(checkout_confirm, pattern='^checkout_confirm$'),
-                               CallbackQueryHandler(checkout_cancel, pattern='^checkout_cancel$')]
+            CHECKOUT_CONFIRM: [CallbackQueryHandler(checkout_confirm, pattern='^checkout_confirm$')]
         },
-        fallbacks=[CommandHandler('cancel', cancel_command)],
+        fallbacks=[CallbackQueryHandler(checkout_cancel, pattern='^checkout_cancel$')],
         per_message=False
     )
     dp.add_handler(checkout_conv)
 
-    # Добавление товара - ИСПРАВЛЕНО
+    # Добавление товара
     add_product_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_add_product_start, pattern='^admin_add_product$')],
         states={
@@ -2205,15 +2199,12 @@ def main():
             ],
             ADD_PRODUCT_PHOTO: [
                 MessageHandler(Filters.photo, admin_add_product_photo),
-                MessageHandler(Filters.regex('^/skip$'), admin_add_product_photo),  # Обработка /skip
                 CallbackQueryHandler(admin_add_more_photo, pattern='^admin_add_more_photo$'),
+                CallbackQueryHandler(admin_skip_photos, pattern='^admin_skip_photos$'),
                 CallbackQueryHandler(admin_finish_photos, pattern='^admin_finish_photos$')
             ]
         },
-        fallbacks=[
-            CommandHandler('cancel', admin_cancel_add),
-            CallbackQueryHandler(admin_cancel_add, pattern='^admin_cancel_add$')
-        ],
+        fallbacks=[CallbackQueryHandler(admin_cancel_add, pattern='^admin_cancel_add$')],
         per_message=False,
         allow_reentry=False
     )
@@ -2224,10 +2215,9 @@ def main():
         entry_points=[CallbackQueryHandler(admin_mailing, pattern='^admin_mailing$')],
         states={
             MAILING_TEXT: [MessageHandler(Filters.text & ~Filters.command, admin_mailing_text)],
-            MAILING_CONFIRM: [CallbackQueryHandler(admin_mailing_send, pattern='^mailing_send$'),
-                              CallbackQueryHandler(admin_mailing_cancel, pattern='^mailing_cancel$')]
+            MAILING_CONFIRM: [CallbackQueryHandler(admin_mailing_send, pattern='^mailing_send$')]
         },
-        fallbacks=[CommandHandler('cancel', cancel_command)],
+        fallbacks=[CallbackQueryHandler(admin_mailing_cancel, pattern='^mailing_cancel$')],
         per_message=False,
         allow_reentry=False
     )
@@ -2239,7 +2229,7 @@ def main():
         states={
             ORDER_REJECT_REASON: [MessageHandler(Filters.text & ~Filters.command, admin_custom_reject_reason)]
         },
-        fallbacks=[CommandHandler('cancel', cancel_command)],
+        fallbacks=[CallbackQueryHandler(callback_admin_back, pattern='^admin_back$')],
         per_message=False,
         allow_reentry=False
     )
@@ -2280,7 +2270,6 @@ def main():
     dp.add_handler(CallbackQueryHandler(callback_user_orders_page, pattern='^user_orders_page_'))
     
     dp.add_handler(CallbackQueryHandler(admin_delete_product_start, pattern='^admin_delete_product$'))
-    dp.add_handler(CallbackQueryHandler(admin_cancel_delete, pattern='^admin_cancel_delete$'))
     dp.add_handler(CallbackQueryHandler(admin_delete_product_confirm, pattern=r'^adm_del_prod_\d+$'))
     dp.add_handler(CallbackQueryHandler(admin_delete_product_yes, pattern='^adm_del_prod_yes_'))
     
