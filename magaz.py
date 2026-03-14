@@ -1316,6 +1316,7 @@ def callback_product(update: Update, context: CallbackContext):
         
         parts = query.data.split('_')
         prod_id = int(parts[1])
+        # ИСПРАВЛЕНО: проверяем, что parts[2] существует и не равен '0'
         subcategory_id = int(parts[2]) if len(parts) > 2 and parts[2] != '0' else None
         product = get_product(prod_id)
         if not product:
@@ -1394,7 +1395,9 @@ def callback_product_photo_nav(update: Update, context: CallbackContext):
             text += f"📏 *Размеры:* {', '.join(sizes_list)}\n"
         else:
             text += "📏 Размеры: единый размер.\n"
-        keyboard = product_detail_keyboard(prod_id, sizes_list, target, len(images), product.get('subcategory_id'))
+        # ИСПРАВЛЕНО: явно получаем subcategory_id из product
+        subcategory_id = product.get('subcategory_id')
+        keyboard = product_detail_keyboard(prod_id, sizes_list, target, len(images), subcategory_id)
 
         try:
             query.edit_message_media(
