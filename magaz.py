@@ -799,10 +799,7 @@ def mailing_confirm_keyboard() -> InlineKeyboardMarkup:
 
 def admin_photo_options_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
-        [
-            InlineKeyboardButton("➕ Добавить ещё фото", callback_data="admin_add_more_photo"),
-            InlineKeyboardButton("⏭ Пропустить фото", callback_data="admin_skip_photos")
-        ],
+        [InlineKeyboardButton("⏭ Пропустить добавление фото", callback_data="admin_skip_photos")],
         [InlineKeyboardButton("❌ Отменить добавление", callback_data="admin_cancel_add")]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -823,36 +820,26 @@ def notify_admins(bot, message: str):
         except Exception as e:
             logger.error(f"Failed to notify admin {admin_id}: {e}")
 
-def cancel_conversation(update: Update, context: CallbackContext, message: str = "❌ Действие отменено."):
-    """Универсальная функция отмены любой операции"""
-    user_id = update.effective_user.id
-    
-    # Удаляем все сообщения, связанные с текущей операцией
+def end_conversation_and_clear(user_id: int, context: CallbackContext, chat_id: int, message: str):
+    """Завершает разговор, очищает сообщения и отправляет финальное сообщение"""
+    # Удаляем все сообщения пользователя
     messages = delete_user_messages(user_id)
-    for chat_id, msg_id in messages:
+    for msg_chat_id, msg_id in messages:
         try:
-            context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            context.bot.delete_message(chat_id=msg_chat_id, message_id=msg_id)
         except:
             pass
     
     # Очищаем данные пользователя
     context.user_data.clear()
     
-    # Отправляем сообщение об отмене
-    if update.callback_query:
-        query = update.callback_query
-        query.answer()
-        query.edit_message_text(message)
-        query.message.reply_text(
-            "🏠 Главное меню:",
-            reply_markup=get_main_menu_keyboard(is_admin(user_id))
-        )
-    elif update.message:
-        sent_msg = update.message.reply_text(
-            message,
-            reply_markup=get_main_menu_keyboard(is_admin(user_id))
-        )
-        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "menu")
+    # Отправляем сообщение об окончании
+    sent_msg = context.bot.send_message(
+        chat_id=chat_id,
+        text=message,
+        reply_markup=get_main_menu_keyboard(is_admin(user_id))
+    )
+    save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "menu")
     
     return ConversationHandler.END
 
@@ -891,7 +878,9 @@ def start(update: Update, context: CallbackContext):
     save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "menu")
 
 def search_command(update: Update, context: CallbackContext):
-    # Создаем клавиатуру с кнопкой отмены
+    user_id = update.effective_user.id
+    
+    # Клавиатура с кнопкой отмены
     keyboard = [[InlineKeyboardButton("❌ Отменить поиск", callback_data="cancel_search")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -899,14 +888,24 @@ def search_command(update: Update, context: CallbackContext):
         "🔍 Введите название товара для поиска:",
         reply_markup=reply_markup
     )
-    save_message(update.effective_user.id, sent_msg.chat_id, sent_msg.message_id, "search")
+    save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "search")
     return SEARCH_QUERY
 
 def cancel_search(update: Update, context: CallbackContext):
     """Отмена поиска"""
     query = update.callback_query
     query.answer()
-    return cancel_conversation(update, context, "🔍 Поиск отменён.")
+    
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+    
+    # Удаляем сообщение с кнопками
+    try:
+        query.message.delete()
+    except:
+        pass
+    
+    return end_conversation_and_clear(user_id, context, chat_id, "🔍 Поиск отменён.")
 
 # -------------------- ОБРАБОТЧИКИ ТЕКСТОВЫХ КНОПОК --------------------
 def handle_assortment(update: Update, context: CallbackContext):
@@ -1429,9 +1428,19 @@ def checkout_confirm(update: Update, context: CallbackContext):
 
 def checkout_cancel(update: Update, context: CallbackContext):
     """Отмена оформления заказа"""
-    if update.callback_query:
-        return cancel_conversation(update, context, "❌ Оформление заказа отменено.")
-    return ConversationHandler.END
+    query = update.callback_query
+    query.answer()
+    
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+    
+    # Удаляем сообщение с кнопками
+    try:
+        query.message.delete()
+    except:
+        pass
+    
+    return end_conversation_and_clear(user_id, context, chat_id, "❌ Оформление заказа отменено.")
 
 # -------------------- ОБРАБОТЧИКИ ЗАКАЗОВ ПОЛЬЗОВАТЕЛЯ --------------------
 def callback_user_order_detail(update: Update, context: CallbackContext):
@@ -1652,101 +1661,100 @@ def admin_add_product_photo(update: Update, context: CallbackContext):
         save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin_add")
         return ADD_PRODUCT_PHOTO
 
-def admin_add_more_photo(update: Update, context: CallbackContext):
-    query = update.callback_query
-    query.answer()
-    user_id = query.from_user.id
-    
-    save_message(user_id, query.message.chat_id, query.message.message_id, "admin_add")
-    
-    query.edit_message_text("🖼 Отправьте следующее фото:")
-    return ADD_PRODUCT_PHOTO
-
 def admin_skip_photos(update: Update, context: CallbackContext):
     """Пропуск добавления фото"""
     query = update.callback_query
     query.answer()
     
-    return admin_finish_product_creation(update, context, with_photos=False)
+    user_id = query.from_user.id
+    
+    # Создаем товар без фото
+    product_id = add_product(
+        name=context.user_data['name'],
+        description=context.user_data['description'],
+        price=context.user_data['price'],
+        sizes=context.user_data['sizes'],
+        subcategory_id=context.user_data.get('subcategory_id')
+    )
+    
+    # Удаляем все сообщения процесса добавления
+    delete_user_messages(user_id, "admin_add")
+    
+    # Отправляем сообщение об успехе
+    query.message.delete()
+    sent_msg = context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text=f"✅ Товар успешно добавлен без фото! ID: {product_id}"
+    )
+    save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin")
+    
+    context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="🔧 Админ-панель:",
+        reply_markup=admin_menu_keyboard()
+    )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
 
 def admin_finish_photos(update: Update, context: CallbackContext):
     """Завершение добавления с фото"""
     query = update.callback_query
     query.answer()
     
-    return admin_finish_product_creation(update, context, with_photos=True)
-
-def admin_finish_product_creation(update, context, with_photos=True):
-    """Общая функция для завершения создания товара"""
-    user_id = None
+    user_id = query.from_user.id
     
-    if isinstance(update, CallbackQuery):
-        query = update
-        user_id = query.from_user.id
-        chat_id = query.message.chat_id
-        
-        # Создаем товар
-        product_id = add_product(
-            name=context.user_data['name'],
-            description=context.user_data['description'],
-            price=context.user_data['price'],
-            sizes=context.user_data['sizes'],
-            subcategory_id=context.user_data.get('subcategory_id')
-        )
-        
-        # Добавляем фото, если они есть
-        if with_photos:
-            photos = context.user_data.get('photos', [])
-            for idx, file_id in enumerate(photos):
-                add_product_image(product_id, file_id, position=idx)
-            photo_text = f" с {len(photos)} фото"
-        else:
-            photo_text = " без фото"
-        
-        # Удаляем все сообщения процесса добавления
-        messages = delete_user_messages(user_id, "admin_add")
-        for msg_chat_id, msg_id in messages:
-            try:
-                context.bot.delete_message(chat_id=msg_chat_id, message_id=msg_id)
-            except:
-                pass
-        
-        query.edit_message_text(f"✅ Товар успешно добавлен{photo_text}! ID: {product_id}")
-        query.message.reply_text("🔧 Админ-панель:", reply_markup=admin_menu_keyboard())
+    # Создаем товар
+    product_id = add_product(
+        name=context.user_data['name'],
+        description=context.user_data['description'],
+        price=context.user_data['price'],
+        sizes=context.user_data['sizes'],
+        subcategory_id=context.user_data.get('subcategory_id')
+    )
     
-    elif isinstance(update, MessageHandler) or hasattr(update, 'message'):
-        message = update.message
-        user_id = message.from_user.id
-        chat_id = message.chat_id
-        
-        # Создаем товар
-        product_id = add_product(
-            name=context.user_data['name'],
-            description=context.user_data['description'],
-            price=context.user_data['price'],
-            sizes=context.user_data['sizes'],
-            subcategory_id=context.user_data.get('subcategory_id')
-        )
-        
-        # Удаляем все сообщения процесса добавления
-        messages = delete_user_messages(user_id, "admin_add")
-        for msg_chat_id, msg_id in messages:
-            try:
-                context.bot.delete_message(chat_id=msg_chat_id, message_id=msg_id)
-            except:
-                pass
-        
-        message.reply_text(f"✅ Товар успешно добавлен без фото! ID: {product_id}")
-        message.reply_text("🔧 Админ-панель:", reply_markup=admin_menu_keyboard())
+    # Добавляем фото
+    photos = context.user_data.get('photos', [])
+    for idx, file_id in enumerate(photos):
+        add_product_image(product_id, file_id, position=idx)
+    
+    photo_text = f" с {len(photos)} фото"
+    
+    # Удаляем все сообщения процесса добавления
+    delete_user_messages(user_id, "admin_add")
+    
+    # Отправляем сообщение об успехе
+    query.message.delete()
+    sent_msg = context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text=f"✅ Товар успешно добавлен{photo_text}! ID: {product_id}"
+    )
+    save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin")
+    
+    context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="🔧 Админ-панель:",
+        reply_markup=admin_menu_keyboard()
+    )
     
     context.user_data.clear()
     return ConversationHandler.END
 
 def admin_cancel_add(update: Update, context: CallbackContext):
     """Отмена добавления товара"""
-    if update.callback_query:
-        return cancel_conversation(update, context, "❌ Добавление товара отменено.")
-    return ConversationHandler.END
+    query = update.callback_query
+    query.answer()
+    
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+    
+    # Удаляем сообщение с кнопками
+    try:
+        query.message.delete()
+    except:
+        pass
+    
+    return end_conversation_and_clear(user_id, context, chat_id, "❌ Добавление товара отменено.")
 
 # -------------------- АДМИН ОБРАБОТЧИКИ (УДАЛЕНИЕ ТОВАРОВ) --------------------
 def admin_delete_product_start(update: Update, context: CallbackContext):
@@ -2001,7 +2009,13 @@ def admin_mailing(update: Update, context: CallbackContext):
 
 def admin_mailing_text(update: Update, context: CallbackContext):
     """Получение текста рассылки"""
-    text = update.message.text
+    text = update.message.text.strip()
+    
+    # Проверка на пустой текст
+    if not text:
+        update.message.reply_text("❌ Текст не может быть пустым. Попробуйте снова:")
+        return MAILING_TEXT
+    
     context.user_data['mailing_text'] = text
     
     users = get_all_users()
@@ -2077,9 +2091,19 @@ def admin_mailing_send(update: Update, context: CallbackContext):
 
 def admin_mailing_cancel(update: Update, context: CallbackContext):
     """Отмена рассылки"""
-    if update.callback_query:
-        return cancel_conversation(update, context, "❌ Рассылка отменена.")
-    return ConversationHandler.END
+    query = update.callback_query
+    query.answer()
+    
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+    
+    # Удаляем сообщение с кнопками
+    try:
+        query.message.delete()
+    except:
+        pass
+    
+    return end_conversation_and_clear(user_id, context, chat_id, "❌ Рассылка отменена.")
 
 # -------------------- ОБРАБОТЧИКИ ПОИСКА --------------------
 def search_query(update: Update, context: CallbackContext):
@@ -2121,10 +2145,15 @@ def callback_back_to_main(update: Update, context: CallbackContext):
     
     delete_user_messages(user_id)
     
-    query.message.delete()
+    try:
+        query.message.delete()
+    except:
+        pass
+    
     admin_flag = is_admin(user_id)
-    sent_msg = query.message.reply_text(
-        "🏠 Главное меню:",
+    sent_msg = context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="🏠 Главное меню:",
         reply_markup=get_main_menu_keyboard(admin_flag)
     )
     save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "menu")
@@ -2159,7 +2188,9 @@ def main():
         states={
             SEARCH_QUERY: [MessageHandler(Filters.text & ~Filters.command, search_query)]
         },
-        fallbacks=[CallbackQueryHandler(cancel_search, pattern='^cancel_search$')]
+        fallbacks=[CallbackQueryHandler(cancel_search, pattern='^cancel_search$')],
+        per_message=False,
+        allow_reentry=True
     )
     dp.add_handler(search_conv)
 
@@ -2173,7 +2204,8 @@ def main():
             CHECKOUT_CONFIRM: [CallbackQueryHandler(checkout_confirm, pattern='^checkout_confirm$')]
         },
         fallbacks=[CallbackQueryHandler(checkout_cancel, pattern='^checkout_cancel$')],
-        per_message=False
+        per_message=False,
+        allow_reentry=True
     )
     dp.add_handler(checkout_conv)
 
@@ -2199,14 +2231,13 @@ def main():
             ],
             ADD_PRODUCT_PHOTO: [
                 MessageHandler(Filters.photo, admin_add_product_photo),
-                CallbackQueryHandler(admin_add_more_photo, pattern='^admin_add_more_photo$'),
                 CallbackQueryHandler(admin_skip_photos, pattern='^admin_skip_photos$'),
                 CallbackQueryHandler(admin_finish_photos, pattern='^admin_finish_photos$')
             ]
         },
         fallbacks=[CallbackQueryHandler(admin_cancel_add, pattern='^admin_cancel_add$')],
         per_message=False,
-        allow_reentry=False
+        allow_reentry=True
     )
     dp.add_handler(add_product_conv)
 
@@ -2219,7 +2250,7 @@ def main():
         },
         fallbacks=[CallbackQueryHandler(admin_mailing_cancel, pattern='^mailing_cancel$')],
         per_message=False,
-        allow_reentry=False
+        allow_reentry=True
     )
     dp.add_handler(mailing_conv)
 
@@ -2231,7 +2262,7 @@ def main():
         },
         fallbacks=[CallbackQueryHandler(callback_admin_back, pattern='^admin_back$')],
         per_message=False,
-        allow_reentry=False
+        allow_reentry=True
     )
     dp.add_handler(reject_reason_conv)
 
