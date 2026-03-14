@@ -764,6 +764,7 @@ def products_keyboard(products: List[Dict[str, Any]], page: int, total_pages: in
         keyboard.append(nav_buttons)
 
     keyboard.append([InlineKeyboardButton("🔙 К подкатегориям", callback_data=f"back_to_subcats_{subcategory_id}")])
+    print(f"products_keyboard создана для subcategory_id={subcategory_id}")  # Отладка
     return InlineKeyboardMarkup(keyboard)
 
 # ИСПРАВЛЕННАЯ ФУНКЦИЯ - теперь кнопка "Назад" возвращает к товарам
