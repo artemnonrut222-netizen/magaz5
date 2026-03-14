@@ -766,7 +766,7 @@ def products_keyboard(products: List[Dict[str, Any]], page: int, total_pages: in
     keyboard.append([InlineKeyboardButton("🔙 К подкатегориям", callback_data=f"back_to_subcats_{subcategory_id}")])
     return InlineKeyboardMarkup(keyboard)
 
-# ИСПРАВЛЕННАЯ ФУНКЦИЯ - теперь кнопка называется "Назад"
+# ИСПРАВЛЕННАЯ ФУНКЦИЯ - теперь кнопка "Назад" возвращает к товарам
 def product_detail_keyboard(
     product_id: int,
     sizes: List[str],
@@ -794,9 +794,9 @@ def product_detail_keyboard(
 
     keyboard.append([InlineKeyboardButton("➕ Добавить в корзину", callback_data=f"add_{product_id}_")])
 
-    # Кнопка назад - используем существующую рабочую кнопку
+    # Кнопка назад - возвращает к списку товаров
     if subcategory_id:
-        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f"back_to_subcat_products_{subcategory_id}")])
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f"back_to_products_{subcategory_id}")])
     else:
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_assortment")])
     
@@ -1449,12 +1449,13 @@ def callback_add_to_cart(update: Update, context: CallbackContext):
     except Exception as e:
         logger.error(f"Error in callback_add_to_cart: {e}")
 
-def callback_back_to_subcat_products(update: Update, context: CallbackContext):
+# ИСПРАВЛЕННАЯ ФУНКЦИЯ - теперь работает с back_to_products_
+def callback_back_to_products(update: Update, context: CallbackContext):
     """Возврат к списку товаров из карточки товара"""
     try:
         query = update.callback_query
         query.answer()
-        # Формат: back_to_subcat_products_{subcategory_id}
+        # Формат: back_to_products_{subcategory_id}
         subcategory_id = int(query.data.split('_')[-1])
         
         user_id = query.from_user.id
@@ -1465,7 +1466,7 @@ def callback_back_to_subcat_products(update: Update, context: CallbackContext):
         # Показываем список товаров
         show_products_by_subcategory(query, subcategory_id, 1, context)
     except Exception as e:
-        logger.error(f"Error in callback_back_to_subcat_products: {e}")
+        logger.error(f"Error in callback_back_to_products: {e}")
 
 def callback_back_to_products_all(update: Update, context: CallbackContext):
     try:
@@ -2696,7 +2697,7 @@ def main():
         dp.add_handler(CallbackQueryHandler(callback_product_photo_nav, pattern='^photo_'))
         dp.add_handler(CallbackQueryHandler(callback_size, pattern='^size_'))
         dp.add_handler(CallbackQueryHandler(callback_add_to_cart, pattern='^add_'))
-        dp.add_handler(CallbackQueryHandler(callback_back_to_subcat_products, pattern='^back_to_subcat_products_'))
+        dp.add_handler(CallbackQueryHandler(callback_back_to_products, pattern='^back_to_products_\d+$'))
         dp.add_handler(CallbackQueryHandler(callback_back_to_products_all, pattern='^back_to_products_all$'))
         
         dp.add_handler(CallbackQueryHandler(cart_increase, pattern='^cart_inc_'))
