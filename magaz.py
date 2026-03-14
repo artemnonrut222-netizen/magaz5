@@ -1248,21 +1248,33 @@ def show_products_by_subcategory(query, subcategory_id: int, page: int, context:
         total = count_products_by_subcategory(subcategory_id)
         total_pages = (total + 9) // 10
 
-        print(f"show_products: subcategory_id={subcategory_id}, products={len(products)}, total={total}")  # Отладка
+        print(f"show_products: subcategory_id={subcategory_id}, products={len(products)}, total={total}")
 
         if not products:
             keyboard = InlineKeyboardMarkup([[
                 InlineKeyboardButton("🔙 К подкатегориям", callback_data=f"back_to_subcats_{subcategory_id}")
             ]])
-            # ВАЖНО: используем edit_message_text, а не send_message
-            query.edit_message_text(
+            # Удаляем старое сообщение и отправляем новое
+            try:
+                query.message.delete()
+            except:
+                pass
+            context.bot.send_message(
+                chat_id=query.message.chat_id,
                 text="📭 В этой подкатегории пока нет товаров.",
                 reply_markup=keyboard
             )
             return
 
-        # ВАЖНО: используем edit_message_text
-        query.edit_message_text(
+        # Удаляем старое сообщение с фото
+        try:
+            query.message.delete()
+        except:
+            pass
+            
+        # Отправляем новое сообщение со списком товаров
+        context.bot.send_message(
+            chat_id=query.message.chat_id,
             text=f"📦 Товары (стр. {page}/{total_pages}):",
             reply_markup=products_keyboard(products, page, total_pages, subcategory_id)
         )
