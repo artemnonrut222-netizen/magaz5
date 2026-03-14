@@ -2697,7 +2697,7 @@ def main():
         dp.add_handler(CallbackQueryHandler(callback_size, pattern='^size_'))
         dp.add_handler(CallbackQueryHandler(callback_add_to_cart, pattern='^add_'))
         dp.add_handler(CallbackQueryHandler(callback_back_to_products, pattern='^back_to_products_'))  # ВАЖНО: без \d+$
-        dp.add_handler(CallbackQueryHandler(callback_back_to_products_all, pattern='^back_to_products_all$'))
+        #dp.add_handler(CallbackQueryHandler(callback_back_to_products_all, pattern='^back_to_products_all$'))
         
         dp.add_handler(CallbackQueryHandler(cart_increase, pattern='^cart_inc_'))
         dp.add_handler(CallbackQueryHandler(cart_decrease, pattern='^cart_dec_'))
