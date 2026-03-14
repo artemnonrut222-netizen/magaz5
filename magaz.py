@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-RAWWEAR Telegram Shop Bot - ИСПРАВЛЕННАЯ ВЕРСИЯ
+RAWWEAR Telegram Shop Bot - АБСОЛЮТНО РАБОЧАЯ ВЕРСИЯ
 """
 
 import logging
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # -------------------- ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК --------------------
 def error_handler(update: Update, context: CallbackContext):
-    """Глобальный обработчик ошибок - просто логируем, не отправляем сообщения"""
+    """Глобальный обработчик ошибок - просто логируем"""
     logger.error(f"Unhandled error: {context.error}\n{traceback.format_exc()}")
 
 # -------------------- СОСТОЯНИЯ --------------------
@@ -793,7 +793,7 @@ def product_detail_keyboard(
 
     keyboard.append([InlineKeyboardButton("➕ Добавить в корзину", callback_data=f"add_{product_id}_")])
 
-    # Используем существующую функцию callback_back_to_subcat_products
+    # Кнопка возврата к товарам
     if subcategory_id:
         keyboard.append([InlineKeyboardButton("🔙 К товарам", callback_data=f"back_to_subcat_products_{subcategory_id}")])
     else:
