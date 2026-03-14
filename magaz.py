@@ -1247,19 +1247,26 @@ def show_products_by_subcategory(query, subcategory_id: int, page: int, context:
         total = count_products_by_subcategory(subcategory_id)
         total_pages = (total + 9) // 10
 
+        print(f"show_products: subcategory_id={subcategory_id}, products={len(products)}, total={total}")  # Отладка
+
         if not products:
             keyboard = InlineKeyboardMarkup([[
                 InlineKeyboardButton("🔙 К подкатегориям", callback_data=f"back_to_subcats_{subcategory_id}")
             ]])
-            safe_edit_message_text(query, "📭 В этой подкатегории пока нет товаров.", reply_markup=keyboard)
+            # ВАЖНО: используем edit_message_text, а не send_message
+            query.edit_message_text(
+                text="📭 В этой подкатегории пока нет товаров.",
+                reply_markup=keyboard
+            )
             return
 
-        safe_edit_message_text(
-            query,
-            f"📦 Товары (стр. {page}/{total_pages}):",
+        # ВАЖНО: используем edit_message_text
+        query.edit_message_text(
+            text=f"📦 Товары (стр. {page}/{total_pages}):",
             reply_markup=products_keyboard(products, page, total_pages, subcategory_id)
         )
     except Exception as e:
+        print(f"ОШИБКА в show_products_by_subcategory: {e}")
         logger.error(f"Error in show_products_by_subcategory: {e}")
 
 def callback_subcat_products_page(update: Update, context: CallbackContext):
