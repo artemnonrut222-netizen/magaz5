@@ -1459,7 +1459,10 @@ def callback_back_to_products(update: Update, context: CallbackContext):
         query = update.callback_query
         query.answer()
         # Формат: back_to_products_{subcategory_id}
+        print(f"Нажата кнопка назад с data: {query.data}")  # Отладка
+        
         subcategory_id = int(query.data.split('_')[-1])
+        print(f"Извлечен subcategory_id: {subcategory_id}")  # Отладка
         
         user_id = query.from_user.id
         
@@ -1469,16 +1472,8 @@ def callback_back_to_products(update: Update, context: CallbackContext):
         # Показываем список товаров
         show_products_by_subcategory(query, subcategory_id, 1, context)
     except Exception as e:
+        print(f"ОШИБКА в callback_back_to_products: {e}")  # Отладка
         logger.error(f"Error in callback_back_to_products: {e}")
-
-def callback_back_to_products_all(update: Update, context: CallbackContext):
-    try:
-        query = update.callback_query
-        query.answer()
-        callback_back_to_assortment(update, context)
-    except Exception as e:
-        logger.error(f"Error in callback_back_to_products_all: {e}")
-
 # -------------------- ОБРАБОТЧИКИ КОРЗИНЫ --------------------
 def cart_increase(update: Update, context: CallbackContext):
     try:
@@ -2690,6 +2685,7 @@ def main():
         dp.add_handler(MessageHandler(Filters.regex('^🔧 Админ панель$'), handle_admin_panel))
 
         # Callback-запросы
+                # Callback-запросы
         dp.add_handler(CallbackQueryHandler(callback_show_subcategories, pattern='^cat_'))
         dp.add_handler(CallbackQueryHandler(callback_show_products_by_subcategory, pattern='^subcat_'))
         dp.add_handler(CallbackQueryHandler(callback_subcat_products_page, pattern='^subcat_prod_page_'))
@@ -2700,7 +2696,7 @@ def main():
         dp.add_handler(CallbackQueryHandler(callback_product_photo_nav, pattern='^photo_'))
         dp.add_handler(CallbackQueryHandler(callback_size, pattern='^size_'))
         dp.add_handler(CallbackQueryHandler(callback_add_to_cart, pattern='^add_'))
-        dp.add_handler(CallbackQueryHandler(callback_back_to_products, pattern='^back_to_products_\d+$'))
+        dp.add_handler(CallbackQueryHandler(callback_back_to_products, pattern='^back_to_products_'))  # ВАЖНО: без \d+$
         dp.add_handler(CallbackQueryHandler(callback_back_to_products_all, pattern='^back_to_products_all$'))
         
         dp.add_handler(CallbackQueryHandler(cart_increase, pattern='^cart_inc_'))
