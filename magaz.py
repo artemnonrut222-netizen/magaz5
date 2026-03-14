@@ -766,6 +766,7 @@ def products_keyboard(products: List[Dict[str, Any]], page: int, total_pages: in
     keyboard.append([InlineKeyboardButton("🔙 К подкатегориям", callback_data=f"back_to_subcats_{subcategory_id}")])
     return InlineKeyboardMarkup(keyboard)
 
+# ИСПРАВЛЕННАЯ ФУНКЦИЯ - теперь кнопка называется "Назад"
 def product_detail_keyboard(
     product_id: int,
     sizes: List[str],
@@ -793,11 +794,11 @@ def product_detail_keyboard(
 
     keyboard.append([InlineKeyboardButton("➕ Добавить в корзину", callback_data=f"add_{product_id}_")])
 
-    # Кнопка возврата к товарам
+    # Кнопка назад - используем существующую рабочую кнопку
     if subcategory_id:
-        keyboard.append([InlineKeyboardButton("🔙 К товарам", callback_data=f"back_to_subcat_products_{subcategory_id}")])
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f"back_to_subcat_products_{subcategory_id}")])
     else:
-        keyboard.append([InlineKeyboardButton("🔙 К товарам", callback_data="back_to_assortment")])
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_assortment")])
     
     return InlineKeyboardMarkup(keyboard)
 
@@ -1448,16 +1449,13 @@ def callback_add_to_cart(update: Update, context: CallbackContext):
     except Exception as e:
         logger.error(f"Error in callback_add_to_cart: {e}")
 
-# ИСПРАВЛЕННАЯ ФУНКЦИЯ - теперь берёт последний элемент
 def callback_back_to_subcat_products(update: Update, context: CallbackContext):
     """Возврат к списку товаров из карточки товара"""
     try:
         query = update.callback_query
         query.answer()
         # Формат: back_to_subcat_products_{subcategory_id}
-        # Разбиваем строку и берём последний элемент (это всегда ID подкатегории)
-        parts = query.data.split('_')
-        subcategory_id = int(parts[-1])  # ИСПРАВЛЕНО: берём последний элемент
+        subcategory_id = int(query.data.split('_')[-1])
         
         user_id = query.from_user.id
         
