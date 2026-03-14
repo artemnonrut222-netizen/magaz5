@@ -1448,13 +1448,16 @@ def callback_add_to_cart(update: Update, context: CallbackContext):
     except Exception as e:
         logger.error(f"Error in callback_add_to_cart: {e}")
 
+# ИСПРАВЛЕННАЯ ФУНКЦИЯ - теперь берёт последний элемент
 def callback_back_to_subcat_products(update: Update, context: CallbackContext):
     """Возврат к списку товаров из карточки товара"""
     try:
         query = update.callback_query
         query.answer()
         # Формат: back_to_subcat_products_{subcategory_id}
-        subcategory_id = int(query.data.split('_')[4])
+        # Разбиваем строку и берём последний элемент (это всегда ID подкатегории)
+        parts = query.data.split('_')
+        subcategory_id = int(parts[-1])  # ИСПРАВЛЕНО: берём последний элемент
         
         user_id = query.from_user.id
         
