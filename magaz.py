@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-RAWWEAR Telegram Shop Bot - СТАБИЛЬНАЯ ВЕРСИЯ
+RAWWEAR Telegram Shop Bot - ИСПРАВЛЕННАЯ ВЕРСИЯ
 """
 
 import logging
@@ -816,7 +816,7 @@ def product_detail_keyboard(
 
     keyboard.append([InlineKeyboardButton("➕ Добавить в корзину", callback_data=f"add_{product_id}_")])
 
-    # Исправленная навигация обратно к товарам
+    # Кнопка возврата к товарам
     if subcategory_id:
         keyboard.append([InlineKeyboardButton("🔙 К товарам", callback_data=f"back_to_products_{subcategory_id}")])
     else:
@@ -987,8 +987,22 @@ def safe_edit_message_text(query, text: str, reply_markup=None, parse_mode=None)
         return True
     except BadRequest as e:
         if "message is not modified" in str(e).lower():
-            # Сообщение не изменилось - это нормально
             return True
+        elif "There is no text in the message to edit" in str(e).lower():
+            # Если сообщение не содержит текста (например, фото), отправляем новое
+            try:
+                chat_id = query.message.chat_id
+                context = query.message.bot
+                safe_delete_message(context, chat_id, query.message.message_id)
+                context.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode
+                )
+                return True
+            except:
+                return False
         logger.error(f"Failed to edit message: {e}")
         return False
     except Exception as e:
@@ -1030,22 +1044,25 @@ def start(update: Update, context: CallbackContext):
             "Помогу вам в выборе и заказе самой актуальной и качественной одежды⬇️"
         )
 
-        if BOT_AVATAR_FILE_ID:
-            try:
-                sent_msg = context.bot.send_photo(
-                    chat_id=update.message.chat_id,
-                    photo=BOT_AVATAR_FILE_ID,
-                    caption=welcome_text
-                )
-                save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "welcome")
-            except Exception as e:
-                logger.error(f"Failed to send avatar: {e}")
+        # Отправляем приветствие
+        try:
+            if BOT_AVATAR_FILE_ID and BOT_AVATAR_FILE_ID.strip():
+                try:
+                    sent_msg = context.bot.send_photo(
+                        chat_id=update.message.chat_id,
+                        photo=BOT_AVATAR_FILE_ID,
+                        caption=welcome_text
+                    )
+                except:
+                    sent_msg = update.message.reply_text(welcome_text)
+            else:
                 sent_msg = update.message.reply_text(welcome_text)
-                save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "welcome")
-        else:
+        except:
             sent_msg = update.message.reply_text(welcome_text)
-            save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "welcome")
+        
+        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "welcome")
 
+        # Отправляем меню
         admin_flag = is_admin(user_id)
         sent_msg = update.message.reply_text(
             "👇 Выберите действие:",
@@ -1349,14 +1366,12 @@ def callback_product(update: Update, context: CallbackContext):
             
             if query.message:
                 delete_user_messages(user_id, "product_detail")
-                sent_msg = safe_edit_message_text(
+                safe_edit_message_text(
                     query,
                     text,
                     parse_mode=ParseMode.MARKDOWN,
                     reply_markup=keyboard
                 )
-                if sent_msg:
-                    save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "product_detail")
         else:
             current = 1
             total = len(images)
@@ -1475,7 +1490,11 @@ def callback_back_to_products(update: Update, context: CallbackContext):
         # Извлекаем subcategory_id из callback_data
         # Формат: back_to_products_{subcategory_id}
         parts = query.data.split('_')
-        subcategory_id = int(parts[3])
+        if len(parts) >= 4:
+            subcategory_id = int(parts[3])
+        else:
+            logger.error(f"Invalid callback data: {query.data}")
+            return
         
         user_id = query.from_user.id
         
@@ -1484,6 +1503,7 @@ def callback_back_to_products(update: Update, context: CallbackContext):
         
         # Показываем список товаров
         show_products_by_subcategory(query, subcategory_id, 1, context)
+        
     except Exception as e:
         logger.error(f"Error in callback_back_to_products: {e}")
 
@@ -1692,14 +1712,12 @@ def checkout_confirm(update: Update, context: CallbackContext):
         if order_id:
             delete_user_messages(user_id, "checkout")
             
-            sent_msg = safe_edit_message_text(
+            safe_edit_message_text(
                 query,
                 "✅ Заказ оформлен и отправлен на модерацию!\n\n"
                 "Вам придет уведомление о статусе заказа. "
                 "Следите за заказом в разделе «📦 Мои заказы»."
             )
-            if sent_msg:
-                save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "order_notify")
             
             order = get_order(order_id)
             items_text = ""
@@ -2615,6 +2633,15 @@ def callback_ignore(update: Update, context: CallbackContext):
     except Exception as e:
         logger.error(f"Error in callback_ignore: {e}")
 
+def callback_unknown(update: Update, context: CallbackContext):
+    """Обработчик неизвестных callback запросов"""
+    try:
+        query = update.callback_query
+        query.answer("❌ Неизвестная команда")
+        logger.warning(f"Unknown callback data: {query.data}")
+    except Exception as e:
+        logger.error(f"Error in callback_unknown: {e}")
+
 # -------------------- ОСНОВНАЯ ФУНКЦИЯ --------------------
 def main():
     try:
@@ -2738,7 +2765,7 @@ def main():
         dp.add_handler(CallbackQueryHandler(callback_product_photo_nav, pattern='^photo_'))
         dp.add_handler(CallbackQueryHandler(callback_size, pattern='^size_'))
         dp.add_handler(CallbackQueryHandler(callback_add_to_cart, pattern='^add_'))
-        dp.add_handler(CallbackQueryHandler(callback_back_to_products, pattern='^back_to_products_'))
+        dp.add_handler(CallbackQueryHandler(callback_back_to_products, pattern='^back_to_products_\d+$'))
         dp.add_handler(CallbackQueryHandler(callback_back_to_products_all, pattern='^back_to_products_all$'))
         
         dp.add_handler(CallbackQueryHandler(cart_increase, pattern='^cart_inc_'))
@@ -2763,6 +2790,9 @@ def main():
         dp.add_handler(CallbackQueryHandler(callback_search_page, pattern='^search_page_'))
         dp.add_handler(CallbackQueryHandler(callback_back_to_main, pattern='^back_to_main$'))
         dp.add_handler(CallbackQueryHandler(callback_ignore, pattern='^ignore$'))
+        
+        # Обработчик неизвестных callback_data (всегда последний)
+        dp.add_handler(CallbackQueryHandler(callback_unknown, pattern='.*'))
 
         logger.info("Starting bot polling")
         updater.start_polling()
