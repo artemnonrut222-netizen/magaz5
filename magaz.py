@@ -41,31 +41,8 @@ logger = logging.getLogger(__name__)
 
 # -------------------- ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК --------------------
 def error_handler(update: Update, context: CallbackContext):
-    """Глобальный обработчик ошибок"""
-    try:
-        raise context.error
-    except Exception as e:
-        logger.error(f"Unhandled error: {e}\n{traceback.format_exc()}")
-        
-        # Пытаемся уведомить пользователя
-        try:
-            if update and update.effective_chat:
-                context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text="❌ Произошла внутренняя ошибка. Попробуйте позже или напишите @matpluuux"
-                )
-        except:
-            pass
-        
-        # Уведомляем админов
-        for admin_id in ADMIN_IDS:
-            try:
-                context.bot.send_message(
-                    chat_id=admin_id,
-                    text=f"❌ Критическая ошибка:\n{str(e)[:200]}"
-                )
-            except:
-                pass
+    """Глобальный обработчик ошибок - просто логируем, не отправляем сообщения"""
+    logger.error(f"Unhandled error: {context.error}\n{traceback.format_exc()}")
 
 # -------------------- СОСТОЯНИЯ --------------------
 (
@@ -816,9 +793,9 @@ def product_detail_keyboard(
 
     keyboard.append([InlineKeyboardButton("➕ Добавить в корзину", callback_data=f"add_{product_id}_")])
 
-    # Кнопка возврата к товарам
+    # Используем существующую функцию callback_back_to_subcat_products
     if subcategory_id:
-        keyboard.append([InlineKeyboardButton("🔙 К товарам", callback_data=f"back_to_products_{subcategory_id}")])
+        keyboard.append([InlineKeyboardButton("🔙 К товарам", callback_data=f"back_to_subcat_products_{subcategory_id}")])
     else:
         keyboard.append([InlineKeyboardButton("🔙 К товарам", callback_data="back_to_assortment")])
     
@@ -971,11 +948,8 @@ def safe_delete_message(context: CallbackContext, chat_id: int, message_id: int)
     """Безопасное удаление сообщения"""
     try:
         context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except BadRequest as e:
-        if "message to delete not found" not in str(e).lower():
-            logger.error(f"Failed to delete message: {e}")
-    except Exception as e:
-        logger.error(f"Failed to delete message: {e}")
+    except:
+        pass
 
 def safe_edit_message_text(query, text: str, reply_markup=None, parse_mode=None):
     """Безопасное редактирование сообщения"""
@@ -989,7 +963,6 @@ def safe_edit_message_text(query, text: str, reply_markup=None, parse_mode=None)
         if "message is not modified" in str(e).lower():
             return True
         elif "There is no text in the message to edit" in str(e).lower():
-            # Если сообщение не содержит текста (например, фото), отправляем новое
             try:
                 chat_id = query.message.chat_id
                 context = query.message.bot
@@ -1003,7 +976,6 @@ def safe_edit_message_text(query, text: str, reply_markup=None, parse_mode=None)
                 return True
             except:
                 return False
-        logger.error(f"Failed to edit message: {e}")
         return False
     except Exception as e:
         logger.error(f"Failed to edit message: {e}")
@@ -1048,19 +1020,17 @@ def start(update: Update, context: CallbackContext):
         try:
             if BOT_AVATAR_FILE_ID and BOT_AVATAR_FILE_ID.strip():
                 try:
-                    sent_msg = context.bot.send_photo(
+                    context.bot.send_photo(
                         chat_id=update.message.chat_id,
                         photo=BOT_AVATAR_FILE_ID,
                         caption=welcome_text
                     )
                 except:
-                    sent_msg = update.message.reply_text(welcome_text)
+                    update.message.reply_text(welcome_text)
             else:
-                sent_msg = update.message.reply_text(welcome_text)
+                update.message.reply_text(welcome_text)
         except:
-            sent_msg = update.message.reply_text(welcome_text)
-        
-        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "welcome")
+            update.message.reply_text(welcome_text)
 
         # Отправляем меню
         admin_flag = is_admin(user_id)
@@ -1386,7 +1356,7 @@ def callback_product(update: Update, context: CallbackContext):
             keyboard = product_detail_keyboard(prod_id, sizes_list, current, total, subcategory_id)
             
             safe_delete_message(context, query.message.chat_id, query.message.message_id)
-            sent_msg = context.bot.send_photo(
+            context.bot.send_photo(
                 chat_id=query.message.chat_id,
                 photo=img['file_id'],
                 caption=text,
@@ -1394,7 +1364,6 @@ def callback_product(update: Update, context: CallbackContext):
                 reply_markup=keyboard
             )
             delete_user_messages(user_id, "product_detail")
-            save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "product_detail")
     except Exception as e:
         logger.error(f"Error in callback_product: {e}")
 
@@ -1452,8 +1421,7 @@ def callback_size(update: Update, context: CallbackContext):
         size = parts[2]
         context.user_data['selected_size'] = size
         context.user_data['selected_product'] = prod_id
-        sent_msg = query.message.reply_text(f"📏 Выбран размер {size}. Теперь нажмите «➕ Добавить в корзину».")
-        save_message(query.from_user.id, sent_msg.chat_id, sent_msg.message_id, "size_select")
+        query.message.reply_text(f"📏 Выбран размер {size}. Теперь нажмите «➕ Добавить в корзину».")
     except Exception as e:
         logger.error(f"Error in callback_size: {e}")
 
@@ -1474,27 +1442,19 @@ def callback_add_to_cart(update: Update, context: CallbackContext):
             del context.user_data['selected_size']
         
         if success:
-            sent_msg = query.message.reply_text("✅ Товар добавлен в корзину.")
+            query.message.reply_text("✅ Товар добавлен в корзину.")
         else:
-            sent_msg = query.message.reply_text("❌ Не удалось добавить товар.")
-        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "cart_notify")
+            query.message.reply_text("❌ Не удалось добавить товар.")
     except Exception as e:
         logger.error(f"Error in callback_add_to_cart: {e}")
 
-def callback_back_to_products(update: Update, context: CallbackContext):
+def callback_back_to_subcat_products(update: Update, context: CallbackContext):
     """Возврат к списку товаров из карточки товара"""
     try:
         query = update.callback_query
         query.answer()
-        
-        # Извлекаем subcategory_id из callback_data
-        # Формат: back_to_products_{subcategory_id}
-        parts = query.data.split('_')
-        if len(parts) >= 4:
-            subcategory_id = int(parts[3])
-        else:
-            logger.error(f"Invalid callback data: {query.data}")
-            return
+        # Формат: back_to_subcat_products_{subcategory_id}
+        subcategory_id = int(query.data.split('_')[4])
         
         user_id = query.from_user.id
         
@@ -1503,9 +1463,8 @@ def callback_back_to_products(update: Update, context: CallbackContext):
         
         # Показываем список товаров
         show_products_by_subcategory(query, subcategory_id, 1, context)
-        
     except Exception as e:
-        logger.error(f"Error in callback_back_to_products: {e}")
+        logger.error(f"Error in callback_back_to_subcat_products: {e}")
 
 def callback_back_to_products_all(update: Update, context: CallbackContext):
     try:
@@ -1597,11 +1556,10 @@ def checkout_start(update: Update, context: CallbackContext):
         keyboard = [[InlineKeyboardButton("❌ Отменить оформление", callback_data="checkout_cancel")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        sent_msg = query.message.reply_text(
+        query.message.reply_text(
             "📞 Напишите свой юзернейм или номер телефона, чтобы мы могли связаться с вами.",
             reply_markup=reply_markup
         )
-        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "checkout")
         return CHECKOUT_CONTACT
     except Exception as e:
         logger.error(f"Error in checkout_start: {e}")
@@ -1613,17 +1571,14 @@ def checkout_contact(update: Update, context: CallbackContext):
         contact = update.message.text.strip()
         context.user_data['contact'] = contact
         
-        save_message(user_id, update.message.chat_id, update.message.message_id, "checkout")
-        
         # Клавиатура с отменой
         keyboard = [[InlineKeyboardButton("❌ Отменить оформление", callback_data="checkout_cancel")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        sent_msg = update.message.reply_text(
+        update.message.reply_text(
             "🏙 Введите ваш город и адрес доставки.",
             reply_markup=reply_markup
         )
-        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "checkout")
         return CHECKOUT_ADDRESS
     except Exception as e:
         logger.error(f"Error in checkout_contact: {e}")
@@ -1635,17 +1590,14 @@ def checkout_address(update: Update, context: CallbackContext):
         address = update.message.text.strip()
         context.user_data['address'] = address
         
-        save_message(user_id, update.message.chat_id, update.message.message_id, "checkout")
-        
         # Клавиатура с отменой
         keyboard = [[InlineKeyboardButton("❌ Отменить оформление", callback_data="checkout_cancel")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        sent_msg = update.message.reply_text(
+        update.message.reply_text(
             "📝 Введите комментарий к заказу (необязательно). Можно отправить прочерк '-'.",
             reply_markup=reply_markup
         )
-        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "checkout")
         return CHECKOUT_COMMENT
     except Exception as e:
         logger.error(f"Error in checkout_address: {e}")
@@ -1658,8 +1610,6 @@ def checkout_comment(update: Update, context: CallbackContext):
         if comment == '-':
             comment = ""
         context.user_data['comment'] = comment
-        
-        save_message(user_id, update.message.chat_id, update.message.message_id, "checkout")
         
         cart_items = get_cart(user_id)
         if not cart_items:
@@ -1681,12 +1631,11 @@ def checkout_comment(update: Update, context: CallbackContext):
             total += item['price'] * item['quantity']
         text += f"\n💰 *Итого: {total} BYN*"
         
-        sent_msg = update.message.reply_text(
+        update.message.reply_text(
             text,
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=checkout_confirm_keyboard()
         )
-        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "checkout")
         return CHECKOUT_CONFIRM
     except Exception as e:
         logger.error(f"Error in checkout_comment: {e}")
@@ -1897,11 +1846,10 @@ def admin_add_product_name(update: Update, context: CallbackContext):
         keyboard = [[InlineKeyboardButton("❌ Отменить добавление", callback_data="admin_cancel_add")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        sent_msg = update.message.reply_text(
+        update.message.reply_text(
             "📄 Введите описание товара:",
             reply_markup=reply_markup
         )
-        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin_add")
         return ADD_PRODUCT_DESCRIPTION
     except Exception as e:
         logger.error(f"Error in admin_add_product_name: {e}")
@@ -1918,11 +1866,10 @@ def admin_add_product_description(update: Update, context: CallbackContext):
         keyboard = [[InlineKeyboardButton("❌ Отменить добавление", callback_data="admin_cancel_add")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        sent_msg = update.message.reply_text(
+        update.message.reply_text(
             "💰 Введите цену товара (только число, в BYN):",
             reply_markup=reply_markup
         )
-        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin_add")
         return ADD_PRODUCT_PRICE
     except Exception as e:
         logger.error(f"Error in admin_add_product_description: {e}")
@@ -1942,11 +1889,10 @@ def admin_add_product_price(update: Update, context: CallbackContext):
             keyboard = [[InlineKeyboardButton("❌ Отменить добавление", callback_data="admin_cancel_add")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            sent_msg = update.message.reply_text(
+            update.message.reply_text(
                 "❌ Цена должна быть положительным целым числом. Попробуйте снова:",
                 reply_markup=reply_markup
             )
-            save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin_add")
             return ADD_PRODUCT_PRICE
         
         context.user_data['price'] = price
@@ -1955,11 +1901,10 @@ def admin_add_product_price(update: Update, context: CallbackContext):
         keyboard = [[InlineKeyboardButton("❌ Отменить добавление", callback_data="admin_cancel_add")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        sent_msg = update.message.reply_text(
+        update.message.reply_text(
             "📏 Введите размеры через запятую (например: S,M,L,XL,36,37,38) или отправьте прочерк (-), если размеров нет:",
             reply_markup=reply_markup
         )
-        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin_add")
         return ADD_PRODUCT_SIZES
     except Exception as e:
         logger.error(f"Error in admin_add_product_price: {e}")
@@ -1975,11 +1920,10 @@ def admin_add_product_sizes(update: Update, context: CallbackContext):
             sizes = ''
         context.user_data['sizes'] = sizes
         
-        sent_msg = update.message.reply_text(
+        update.message.reply_text(
             "🖼 Отправьте фото товара (можно несколько).",
             reply_markup=admin_photo_options_keyboard()
         )
-        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin_add")
         return ADD_PRODUCT_PHOTO
     except Exception as e:
         logger.error(f"Error in admin_add_product_sizes: {e}")
@@ -1997,18 +1941,16 @@ def admin_add_product_photo(update: Update, context: CallbackContext):
             photos.append(file_id)
             context.user_data['photos'] = photos
             
-            sent_msg = update.message.reply_text(
+            update.message.reply_text(
                 f"🖼 Фото {len(photos)} добавлено. Выберите действие:",
                 reply_markup=admin_photo_options_keyboard()
             )
-            save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin_add")
             return ADD_PRODUCT_PHOTO
         else:
-            sent_msg = update.message.reply_text(
+            update.message.reply_text(
                 "❌ Пожалуйста, отправьте фото или выберите действие на клавиатуре:",
                 reply_markup=admin_photo_options_keyboard()
             )
-            save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin_add")
             return ADD_PRODUCT_PHOTO
     except Exception as e:
         logger.error(f"Error in admin_add_product_photo: {e}")
@@ -2047,11 +1989,10 @@ def admin_skip_photos(update: Update, context: CallbackContext):
         
         # Отправляем сообщение об успехе
         safe_delete_message(context, query.message.chat_id, query.message.message_id)
-        sent_msg = context.bot.send_message(
+        context.bot.send_message(
             chat_id=query.message.chat_id,
             text=f"✅ Товар успешно добавлен без фото! ID: {product_id}"
         )
-        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin")
         
         context.bot.send_message(
             chat_id=query.message.chat_id,
@@ -2105,11 +2046,10 @@ def admin_finish_photos(update: Update, context: CallbackContext):
         
         # Отправляем сообщение об успехе
         safe_delete_message(context, query.message.chat_id, query.message.message_id)
-        sent_msg = context.bot.send_message(
+        context.bot.send_message(
             chat_id=query.message.chat_id,
             text=f"✅ Товар успешно добавлен{photo_text}! ID: {product_id}"
         )
-        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "admin")
         
         context.bot.send_message(
             chat_id=query.message.chat_id,
@@ -2602,12 +2542,11 @@ def callback_back_to_main(update: Update, context: CallbackContext):
         safe_delete_message(context, query.message.chat_id, query.message.message_id)
         
         admin_flag = is_admin(user_id)
-        sent_msg = context.bot.send_message(
+        context.bot.send_message(
             chat_id=query.message.chat_id,
             text="🏠 Главное меню:",
             reply_markup=get_main_menu_keyboard(admin_flag)
         )
-        save_message(user_id, sent_msg.chat_id, sent_msg.message_id, "menu")
     except Exception as e:
         logger.error(f"Error in callback_back_to_main: {e}")
 
@@ -2632,15 +2571,6 @@ def callback_ignore(update: Update, context: CallbackContext):
         query.answer()
     except Exception as e:
         logger.error(f"Error in callback_ignore: {e}")
-
-def callback_unknown(update: Update, context: CallbackContext):
-    """Обработчик неизвестных callback запросов"""
-    try:
-        query = update.callback_query
-        query.answer("❌ Неизвестная команда")
-        logger.warning(f"Unknown callback data: {query.data}")
-    except Exception as e:
-        logger.error(f"Error in callback_unknown: {e}")
 
 # -------------------- ОСНОВНАЯ ФУНКЦИЯ --------------------
 def main():
@@ -2765,7 +2695,7 @@ def main():
         dp.add_handler(CallbackQueryHandler(callback_product_photo_nav, pattern='^photo_'))
         dp.add_handler(CallbackQueryHandler(callback_size, pattern='^size_'))
         dp.add_handler(CallbackQueryHandler(callback_add_to_cart, pattern='^add_'))
-        dp.add_handler(CallbackQueryHandler(callback_back_to_products, pattern='^back_to_products_\d+$'))
+        dp.add_handler(CallbackQueryHandler(callback_back_to_subcat_products, pattern='^back_to_subcat_products_'))
         dp.add_handler(CallbackQueryHandler(callback_back_to_products_all, pattern='^back_to_products_all$'))
         
         dp.add_handler(CallbackQueryHandler(cart_increase, pattern='^cart_inc_'))
@@ -2790,9 +2720,6 @@ def main():
         dp.add_handler(CallbackQueryHandler(callback_search_page, pattern='^search_page_'))
         dp.add_handler(CallbackQueryHandler(callback_back_to_main, pattern='^back_to_main$'))
         dp.add_handler(CallbackQueryHandler(callback_ignore, pattern='^ignore$'))
-        
-        # Обработчик неизвестных callback_data (всегда последний)
-        dp.add_handler(CallbackQueryHandler(callback_unknown, pattern='.*'))
 
         logger.info("Starting bot polling")
         updater.start_polling()
