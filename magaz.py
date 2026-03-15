@@ -1962,21 +1962,21 @@ def admin_add_product_photo(update: Update, context: CallbackContext):
             photos.append(file_id)
             context.user_data['photos'] = photos
             
+            # Простое сообщение с клавиатурой
+            keyboard = [
+                [InlineKeyboardButton("✅ ЗАВЕРШИТЬ", callback_data="admin_finish_photos")],
+                [InlineKeyboardButton("⏭ ПРОПУСТИТЬ", callback_data="admin_skip_photos")],
+                [InlineKeyboardButton("❌ ОТМЕНА", callback_data="admin_cancel_add")]
+            ]
+            
             update.message.reply_text(
-                f"🖼 Фото {len(photos)} добавлено. Выберите действие:",
-                reply_markup=admin_photo_options_keyboard()
-            )
-            return ADD_PRODUCT_PHOTO
-        else:
-            update.message.reply_text(
-                "❌ Пожалуйста, отправьте фото или выберите действие на клавиатуре:",
-                reply_markup=admin_photo_options_keyboard()
+                f"✅ Фото {len(photos)} добавлено. Нажмите ЗАВЕРШИТЬ для сохранения:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return ADD_PRODUCT_PHOTO
     except Exception as e:
         logger.error(f"Error in admin_add_product_photo: {e}")
         return ConversationHandler.END
-
 def admin_skip_photos(update: Update, context: CallbackContext):
     """Пропуск добавления фото"""
     try:
