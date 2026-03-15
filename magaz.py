@@ -2059,7 +2059,7 @@ def admin_finish_photos(update: Update, context: CallbackContext):
         for idx, file_id in enumerate(photos):
             add_product_image(product_id, file_id, position=idx)
         
-        photo_text = f" с {len(photos)} фото"
+        photo_text = f" с {len(photos)} фото" if photos else " без фото"
         
         # Удаляем все сообщения процесса добавления
         delete_user_messages(user_id, "admin_add")
