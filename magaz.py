@@ -925,6 +925,7 @@ def mailing_confirm_keyboard() -> InlineKeyboardMarkup:
 
 def admin_photo_options_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
+        [InlineKeyboardButton("✅ Завершить добавление фото", callback_data="admin_finish_photos")],
         [InlineKeyboardButton("⏭ Пропустить добавление фото", callback_data="admin_skip_photos")],
         [InlineKeyboardButton("❌ Отменить добавление", callback_data="admin_cancel_add")]
     ]
