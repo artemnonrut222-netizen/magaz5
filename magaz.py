@@ -910,6 +910,7 @@ def social_media_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📱 TikTok", url="https://www.tiktok.com/@rawwearrr?_r=1&_t=ZS-94eY0eiJVMQ")],
         [InlineKeyboardButton("📸 Instagram", url="https://www.instagram.com/rawwear_storee?igsh=MTdoczZsNTBycjFtZg%3D%3D&utm_source=qr")],
         [InlineKeyboardButton("▶️ YouTube", url="https://youtube.com/@rawwearrr?si=0xFL5L2vU9gcOeZ_")],
+        [InlineKeyboardButton("🟢 Kufar", url="https://www.kufar.by/user/OuuupUPRMB93LSC_mZ0SDLU")],
         [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
